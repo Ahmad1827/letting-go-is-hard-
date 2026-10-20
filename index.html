@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Letting Go Is Hard</title>
+  </head>
+  <body>
+    <div id="desktop">
+      <section class="win" id="office-win">
+        <div class="title"><span>OFFICE.EXE: One World Trade Center, Floor 88</span><span class="ctrls"><i>_</i><i>□</i><i>×</i></span></div>
+        <div id="game"></div>
+      </section>
+
+      <aside id="side">
+        <section class="win">
+          <div class="title"><span>Staff Directory</span></div>
+          <div class="body">
+            <ul id="agent-list" class="list"></ul>
+            <div class="row">
+              <button id="hire">Hire agent</button>
+              <span id="shipped">Shipped: 0</span>
+            </div>
+            <label class="check"><input type="checkbox" id="auto" /> Auto-approve (let go)</label>
+          </div>
+        </section>
+
+        <section class="win">
+          <div class="title"><span>Approval Requests</span></div>
+          <div class="body"><ul id="requests" class="list requests"></ul></div>
+        </section>
+
+        <section class="win grow">
+          <div class="title"><span>Properties</span></div>
+          <div class="body" id="inspect"></div>
+        </section>
+      </aside>
+    </div>
+
+    <footer id="taskbar">
+      <button class="start"><span class="flag"></span><b>Start</b></button>
+      <span class="task">OFFICE.EXE</span>
+      <span class="spacer"></span>
+      <span id="clock" class="tray"></span>
+    </footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,49 @@
+{
+  "name": "letting-go-is-hard",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "tsc && vite build",
+    "start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:linux": "npm run build && electron-builder --linux",
+    "dist:win-installer": "npm run build && electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "electron-builder": "26.17.0",
+    "phaser": "3.90.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.7"
+  },
+  "description": "A 90s pixel-art office where AI agents are your employees",
+  "author": "Ahmad",
+  "main": "electron/main.mjs",
+  "build": {
+    "appId": "com.lettinggoishard.app",
+    "productName": "Letting Go Is Hard",
+    "files": [
+      "dist/**",
+      "electron/**",
+      "build/icon.png",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "icon": "build/icon.png",
+    "win": {
+      "target": [
+        "zip"
+      ],
+      "signAndEditExecutable": false
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Development"
+    }
+  }
+}
