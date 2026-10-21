@@ -399,6 +399,7 @@ function initMusic() {
     save();
   };
   if (prefs.on) music.start();
+  bus.on('shutdown', () => music.fadeOut());
   // browsers only let audio play after the first click or key press
   const wake = () => music.resume();
   window.addEventListener('pointerdown', wake);
@@ -406,7 +407,21 @@ function initMusic() {
   show();
 }
 
+/** The last thing on screen when the app closes. */
+function initGoodbye() {
+  const box = byId('goodbye');
+  byId('goodbye-name').textContent = `Goodbye, ${OWNER}.`;
+  bus.on('goodbye', () => {
+    box.hidden = false;
+    requestAnimationFrame(() => box.classList.add('shown'));
+  });
+  // Electron tells us when the window is closing; the office plays lights-out, then lets it go
+  const office = (window as { office?: { onClosing?(cb: (done: () => void) => void): void } }).office;
+  office?.onClosing?.((done) => bus.emit('shutdown', done));
+}
+
 export function initHud() {
+  initGoodbye();
   initMusic();
   initOffice();
   initUsage();

@@ -3,7 +3,7 @@ import { bus } from '../bus';
 import { buildPeople, CAST } from '../art/people';
 import { buildProps } from '../art/props';
 import { buildRooms } from '../art/rooms';
-import { buildBand } from '../art/skyline';
+import { buildBand, GLASS_TOP, MULLION_STEP, MULLION_W, SILL } from '../art/skyline';
 import { Agent } from '../agents/Agent';
 import type { Crew, CrewHooks } from '../agents/crew';
 import { RealCrew, type AgentBridge } from '../agents/real';
@@ -16,6 +16,38 @@ import {
 } from '../world/map';
 
 const MAX_PAPERS = 12;
+
+/** Merge tiles into rectangles [x, y, w, h]: runs along each row, stacked where rows match. */
+function mergeTiles(tiles: [number, number][]): [number, number, number, number][] {
+  const rows = new Map<number, number[]>();
+  for (const [x, y] of tiles) rows.set(y, [...(rows.get(y) ?? []), x]);
+  const out: [number, number, number, number][] = [];
+  const open = new Map<string, [number, number, number, number]>();
+  for (const y of [...rows.keys()].sort((a, b) => a - b)) {
+    const xs = rows.get(y)!.sort((a, b) => a - b);
+    const runs: [number, number][] = [];
+    for (const x of xs) {
+      const last = runs[runs.length - 1];
+      if (last && x === last[0] + last[1]) last[1]++;
+      else runs.push([x, 1]);
+    }
+    const next = new Map<string, [number, number, number, number]>();
+    for (const [x, w] of runs) {
+      const key = `${x},${w}`, prev = open.get(key);
+      if (prev && prev[1] + prev[3] === y) {
+        prev[3]++;
+        next.set(key, prev);
+      } else {
+        const rect: [number, number, number, number] = [x, y, w, 1];
+        out.push(rect);
+        next.set(key, rect);
+      }
+    }
+    open.clear();
+    next.forEach((v, k) => open.set(k, v));
+  }
+  return out;
+}
 
 /** At their PC: how they sit (typing or not) and what their screen shows, per activity. */
 const AT_PC: Record<Exclude<AgentEvent['activity'], 'queued' | 'pitching'>, ['stand' | 'type', string]> = {
@@ -116,6 +148,7 @@ export class OfficeScene extends Phaser.Scene {
       if (a) this.cameras.main.pan(a.sprite.x, a.sprite.y - 40, 500, 'Sine.easeInOut');
     });
     bus.on('hire', () => this.hire());
+    bus.on('shutdown', (done: () => void) => this.lightsOut(done));
     bus.on('approval:resolve', ({ id, ok }: { id: string; ok: boolean }) => this.resolve(id, ok));
     bus.on('pitch:decide', ({ id, decision }: { id: string; decision: Decision }) => this.crew.decide(id, decision));
     bus.on('agent:say', ({ id, text, pictures }: { id: string; text: string; pictures?: Picture[] }) => this.crew.say(id, text, pictures));
@@ -214,6 +247,89 @@ export class OfficeScene extends Phaser.Scene {
     if (!dx && !dy) return;
     const step = (700 * delta) / 1000 / cam.zoom;
     cam.setScroll(cam.scrollX + dx * step, cam.scrollY + dy * step);
+  }
+
+  // ---------------------------------------------------------------- closing time
+
+  /**
+   * Closing the app: pull back to the whole floor, switch the lights off room by
+   * room (Ahmad's office last), leave the CRTs glowing, fade out, say goodbye.
+   */
+  private lightsOut(done: () => void) {
+    const cam = this.cameras.main, T = TILE;
+    this.input.enabled = false;
+    cam.pan(WIDTH / 2, HEIGHT / 2, 700, 'Sine.easeInOut');
+    cam.zoomTo(this.fitZoom(), 700, 'Sine.easeInOut');
+    // screens keep glowing after the lights go out
+    for (const s of [...this.screens, this.bossScreen]) s.setDepth(20001);
+    const order = ['Mail room', 'Lobby', 'Break room', 'Cubicles', 'Archive', 'Conference', 'Mainframe', 'Corner office'];
+    const zones = order.map((name) => rooms.findIndex((r) => r.name === name)).filter((i) => i >= 0);
+    // each room goes dark together with its walls (a wall belongs to the room it faces)
+    const roomAt = (x: number, y: number) => rooms.findIndex((r) => x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1);
+    const owner = (x: number, y: number) => {
+      for (const [dx, dy] of [[0, 0], [0, 1], [0, -1], [1, 0], [-1, 0], [1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+        const i = roomAt(x + dx, y + dy);
+        if (i >= 0) return i;
+      }
+      return rooms.findIndex((r) => r.name === 'Cubicles');
+    };
+    const tiles = new Map<number, [number, number][]>();
+    for (let y = BAND_ROWS; y < ROWS; y++)
+      for (let x = 0; x < COLS; x++) {
+        const i = owner(x, y);
+        tiles.set(i, [...(tiles.get(i) ?? []), [x, y]]);
+      }
+    const dark = (g: Phaser.GameObjects.Graphics) => {
+      g.setAlpha(0.8);
+      this.time.delayedCall(70, () => g.setAlpha(0.25));
+      this.time.delayedCall(140, () => g.setAlpha(0.84));
+    };
+    const overlays: Phaser.GameObjects.Graphics[] = [];
+    // the office sign hangs over the glass: it goes dark in one piece, not striped by the window columns behind it
+    const signProp = props.find((p) => p.key === 'officesign');
+    const signImg = signProp && this.textures.get('officesign').getSourceImage();
+    const sign = signProp && signImg ? { x0: signProp.x - signImg.width / 2, x1: signProp.x + signImg.width / 2, y0: signProp.y - signImg.height, y1: signProp.y } : null;
+    const frame = (g: Phaser.GameObjects.Graphics, x0: number, x1: number) => {
+      g.fillRect(x0, 0, x1 - x0, GLASS_TOP).fillRect(x0, SILL, x1 - x0, BAND_ROWS * T - SILL);
+      for (let mx = Math.ceil(x0 / MULLION_STEP) * MULLION_STEP; mx < x1; mx += MULLION_STEP) {
+        if (sign && mx + MULLION_W > sign.x0 && mx < sign.x1) {
+          // above and below the sign, plus any bit of the column sticking out beside it
+          g.fillRect(mx, GLASS_TOP, MULLION_W, sign.y0 - GLASS_TOP).fillRect(mx, sign.y1, MULLION_W, SILL - sign.y1);
+          if (mx < sign.x0) g.fillRect(mx, sign.y0, sign.x0 - mx, sign.y1 - sign.y0);
+          if (mx + MULLION_W > sign.x1) g.fillRect(sign.x1, sign.y0, mx + MULLION_W - sign.x1, sign.y1 - sign.y0);
+        } else g.fillRect(mx, GLASS_TOP, MULLION_W, SILL - GLASS_TOP);
+      }
+      if (sign && sign.x0 < x1 && sign.x1 > x0) g.fillRect(sign.x0, sign.y0, sign.x1 - sign.x0, sign.y1 - sign.y0);
+    };
+    zones.forEach((zone, n) =>
+      this.time.delayedCall(900 + n * 350, () => {
+        const g = this.add.graphics().setDepth(20000).setAlpha(0);
+        overlays.push(g);
+        g.fillStyle(0x050818);
+        const mine = tiles.get(zone) ?? [];
+        // as few rectangles as possible: tile-sized ones leave seams when zoomed out
+        for (const [x, y, w, h] of mergeTiles(mine)) g.fillRect(x * T, y * T, w * T, h * T);
+        // rooms along the windows also take their stretch of the window frame; the glass stays lit
+        const top = mine.filter(([, y]) => y === BAND_ROWS).map(([x]) => x);
+        if (top.length) frame(g, Math.min(...top) * T, (Math.max(...top) + 1) * T);
+        dark(g);
+      }),
+    );
+    const lastAt = 900 + zones.length * 350;
+    // once everything is off, one seamless sheet of dark replaces the per-room ones
+    this.time.delayedCall(lastAt + 200, () => {
+      const g = this.add.graphics().setDepth(20000).setAlpha(0.84);
+      g.fillStyle(0x050818).fillRect(0, BAND_ROWS * T, WIDTH, HEIGHT - BAND_ROWS * T);
+      frame(g, 0, WIDTH);
+      overlays.forEach((o) => o.destroy());
+    });
+    this.time.delayedCall(lastAt + 900, () => {
+      cam.fadeOut(900, 0, 0, 0);
+      cam.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
+        bus.emit('goodbye');
+        this.time.delayedCall(2600, done);
+      });
+    });
   }
 
   // ---------------------------------------------------------------- room

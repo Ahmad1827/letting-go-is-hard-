@@ -93,6 +93,9 @@ People only go to two places, so they're easy to keep track of: **their own PC**
 
 Outside it's always night: the 1990s skyline with lit windows, across the river.
 
+Closing the window turns the lights off room by room (Ahmad's office last), leaves the
+CRTs glowing, and says goodbye before the app quits. Running agents are stopped first.
+
 ## Layout
 
 - `electron/main.mjs`: the desktop window.

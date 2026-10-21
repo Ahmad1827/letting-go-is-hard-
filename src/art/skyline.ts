@@ -23,7 +23,9 @@ function gradient(stops: string[], t: number): string {
 
 export const BAND_H = 144;
 
-const GLASS_TOP = 16, HORIZON = 104, WATER_END = 118, SILL = 128;
+/** The window wall's layout: glass between GLASS_TOP and SILL, a steel column every MULLION_STEP px. */
+export const GLASS_TOP = 16, SILL = 128, MULLION_STEP = 20, MULLION_W = 8;
+const HORIZON = 104, WATER_END = 118;
 
 /**
  * The top wall: the Manhattan skyline seen through narrow floor-to-ceiling
@@ -115,8 +117,8 @@ export function buildBand(scene: Phaser.Scene, width: number, phase: Phase) {
     r(0, 0, width, GLASS_TOP, '#d8cdb0');
     for (let xx = 0; xx < width; xx += 32) { r(xx, 0, 1, GLASS_TOP - 2, '#c4b898'); r(xx + 12, 4, 8, 6, '#ece6d2'); r(xx + 13, 5, 6, 4, '#f8f4e8'); }
     r(0, GLASS_TOP - 2, width, 1, '#b8ab88'); r(0, GLASS_TOP - 1, width, 1, '#8a7c5c');
-    for (let x0 = 0; x0 < width; x0 += 20) {
-      r(x0, GLASS_TOP, 8, SILL - GLASS_TOP, '#b9bec4');
+    for (let x0 = 0; x0 < width; x0 += MULLION_STEP) {
+      r(x0, GLASS_TOP, MULLION_W, SILL - GLASS_TOP, '#b9bec4');
       r(x0, GLASS_TOP, 1, SILL - GLASS_TOP, '#eef0f2'); r(x0 + 1, GLASS_TOP, 2, SILL - GLASS_TOP, '#d3d7dc');
       r(x0 + 6, GLASS_TOP, 1, SILL - GLASS_TOP, '#8a9098'); r(x0 + 7, GLASS_TOP, 1, SILL - GLASS_TOP, '#6a7078');
       r(x0 + 8, GLASS_TOP, 12, SILL - GLASS_TOP, 'rgba(170,210,240,0.08)');

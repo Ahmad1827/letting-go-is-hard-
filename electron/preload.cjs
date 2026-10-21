@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('office', {
   listProjects: () => ipcRenderer.invoke('projects:list'),
+  /** The window is closing: play the goodbye, then call done(). */
+  onClosing: (cb) => ipcRenderer.on('app:closing', () => cb(() => ipcRenderer.send('app:close-ready'))),
   agents: {
     start: (id, cfg) => ipcRenderer.invoke('agent:start', id, cfg),
     send: (id, text) => ipcRenderer.send('agent:send', id, text),

@@ -28,6 +28,18 @@ function createWindow() {
   });
   win.webContents.on('will-navigate', (e) => e.preventDefault());
 
+  // closing plays the lights-out goodbye first; the page says when it's done
+  let closing = false;
+  win.on('close', (e) => {
+    if (closing) return;
+    e.preventDefault();
+    closing = true;
+    agents.stopAll();
+    win.webContents.send('app:closing');
+    setTimeout(() => !win.isDestroyed() && win.destroy(), 12000); // in case the page never answers
+  });
+  ipcMain.once('app:close-ready', () => !win.isDestroyed() && win.destroy());
+
   if (devUrl) win.loadURL(devUrl);
   else win.loadFile(path.join(here, '../dist/index.html'));
 }

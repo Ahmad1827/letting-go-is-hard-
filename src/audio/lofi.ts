@@ -81,6 +81,13 @@ export class Lofi {
     this.crackle = null;
   }
 
+  /** Let the music die away over a couple of seconds (closing time). */
+  fadeOut() {
+    if (!this.playing || !this.ctx) return;
+    this.out.gain.setTargetAtTime(0, this.ctx.currentTime, 0.7);
+    window.setTimeout(() => this.stop(), 3000);
+  }
+
   /** Browsers keep audio suspended until the first click or key press. */
   resume() {
     if (this.playing) void this.ctx?.resume();
