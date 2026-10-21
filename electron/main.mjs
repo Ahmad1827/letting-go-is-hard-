@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, Menu, shell } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { setupAgents } from './agents.mjs';
 import { listProjects } from './projects.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -34,6 +35,8 @@ function createWindow() {
 Menu.setApplicationMenu(null);
 
 ipcMain.handle('projects:list', () => listProjects());
+const agents = setupAgents(ipcMain, () => BrowserWindow.getAllWindows()[0]);
+app.on('before-quit', () => agents.stopAll());
 
 app.whenReady().then(() => {
   createWindow();

@@ -1,7 +1,8 @@
 import Phaser from 'phaser';
 import { OWNER } from '../owner';
+import type { Crew, CrewHooks } from './crew';
 import { ideaFor, ordered } from './ideas';
-import type { AgentActivity, AgentEvent, Decision, Idea, ProjectInfo } from './types';
+import type { AgentActivity, Decision, Idea, ProjectInfo } from './types';
 
 /**
  * Fake agents: they produce the same AgentEvents a real agent run will, so the
@@ -33,24 +34,32 @@ interface Run {
   place: number;
 }
 
-export interface SimHooks {
-  emit(ev: AgentEvent): void;
-  note(agentId: string, text: string): void;
-  /** The agent at the front of the line has reached the office (or null once it's decided). */
-  pitch(agentId: string | null, idea: Idea | null): void;
-  /** Everyone waiting to pitch, front of the line first. */
-  queue(agentIds: string[]): void;
-}
-
 const RISKY = (idea: Idea) => [`git push origin ${idea.branch}`, 'rm -rf build/', 'npm install --save-dev vitest', 'git rebase main'];
 
-export class Sim {
+export class Sim implements Crew {
+  readonly real = false;
   autoApprove = false;
   projects: ProjectInfo[] = [];
   private runs = new Map<string, Run>();
   private line: string[] = [];
+  private models = new Map<string, string>();
 
-  constructor(private readonly clock: Phaser.Time.Clock, private readonly hooks: SimHooks) {}
+  constructor(private readonly clock: Phaser.Time.Clock, private readonly hooks: CrewHooks) {}
+
+  say(agentId: string, text: string) {
+    this.note(agentId, `${OWNER}: ${text}`);
+    this.clock.delayedCall(800, () => this.note(agentId, "(Simulated agents can't chat. Open the desktop app for real ones.)"));
+  }
+
+  setModel(agentId: string, model: string) {
+    this.models.set(agentId, model);
+  }
+
+  modelOf(agentId: string) {
+    return this.models.get(agentId) ?? '';
+  }
+
+  interrupt() {}
 
   begin(agentId: string, name: string) {
     this.runs.set(agentId, { name, steps: [], i: -1, settled: false, idea: null, seen: new Set(), place: 0 });

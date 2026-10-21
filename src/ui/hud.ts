@@ -1,4 +1,5 @@
 import { bus } from '../bus';
+import { MODELS } from '../agents/crew';
 import type { AgentActivity, Decision, Idea, ProjectInfo } from '../agents/types';
 import { OWNER } from '../owner';
 
@@ -10,6 +11,9 @@ export interface AgentView {
   task: string;
   avatar: string;
   log: string[];
+  model: string;
+  /** A real Claude Code session rather than a simulated one. */
+  real: boolean;
 }
 
 export interface ApprovalView { id: string; name: string; detail: string }
@@ -218,25 +222,76 @@ export function initHud() {
     );
   };
 
-  const renderInspect = () => {
-    const a = agents.find((x) => x.id === selected);
-    if (!a) {
-      inspect.replaceChildren(el('p', 'hint', 'Click an employee to see what they are up to.'));
-      return;
-    }
+  /** Built once per selected agent, then updated in place so typing isn't wiped by refreshes. */
+  let panel: { id: string; status: HTMLElement; task: HTMLElement; decision: HTMLElement; log: HTMLElement; model: HTMLSelectElement; shown: string } | null = null;
+
+  const buildInspect = (a: AgentView) => {
     const who = el('div', 'who');
     const img = el('img');
     img.src = a.avatar;
     img.alt = a.name;
     const info = el('div');
-    info.append(el('b', undefined, a.name), el('div', undefined, LABEL[a.activity]), el('div', 'task', a.task || '—'));
+    const status = el('div');
+    const task = el('div', 'task');
+    info.append(el('b', undefined, a.name), status, task);
     who.append(img, info);
-    const log = el('pre', 'log', a.log.slice(-40).join('\n'));
-    const parts: HTMLElement[] = [who];
-    if (approvals.some((p) => p.id === a.id)) parts.push(decision(a.id));
-    parts.push(log);
-    inspect.replaceChildren(...parts);
-    log.scrollTop = log.scrollHeight;
+
+    const controls = el('div', 'row controls');
+    const model = el('select');
+    for (const [value, label] of MODELS) {
+      const o = el('option', undefined, label);
+      o.value = value;
+      model.append(o);
+    }
+    model.value = a.model;
+    model.onchange = () => bus.emit('agent:model', { id: a.id, model: model.value });
+    const stop = el('button', undefined, 'Stop');
+    stop.title = 'Interrupt what they are doing right now';
+    stop.onclick = () => bus.emit('agent:stop', a.id);
+    const label = el('label', 'check', 'Model ');
+    label.append(model);
+    controls.append(label, stop);
+
+    const decisionSlot = el('div');
+    const log = el('pre', 'log');
+    const chat = el('form', 'chat');
+    const input = el('input');
+    input.placeholder = `Message ${a.name}...`;
+    const send = el('button', undefined, 'Send');
+    send.type = 'submit';
+    chat.append(input, send);
+    chat.onsubmit = (e) => {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+      bus.emit('agent:say', { id: a.id, text });
+      input.value = '';
+    };
+    inspect.replaceChildren(who, controls, decisionSlot, log, chat);
+    panel = { id: a.id, status, task, decision: decisionSlot, log, model, shown: '' };
+  };
+
+  const renderInspect = () => {
+    const a = agents.find((x) => x.id === selected);
+    if (!a) {
+      panel = null;
+      inspect.replaceChildren(el('p', 'hint', 'Click an employee to see what they are up to.'));
+      return;
+    }
+    if (panel?.id !== a.id) buildInspect(a);
+    const p = panel!;
+    p.status.textContent = LABEL[a.activity];
+    p.task.textContent = a.task || '—';
+    if (document.activeElement !== p.model) p.model.value = a.model;
+    const waiting = approvals.some((x) => x.id === a.id);
+    if (waiting !== !!p.decision.firstChild) p.decision.replaceChildren(...(waiting ? [decision(a.id)] : []));
+    const key = `${a.log.length}|${a.log[a.log.length - 1] ?? ''}`;
+    if (p.shown !== key) {
+      const atBottom = p.log.scrollHeight - p.log.scrollTop - p.log.clientHeight < 30;
+      p.log.textContent = a.log.slice(-150).join('\n');
+      p.shown = key;
+      if (atBottom) p.log.scrollTop = p.log.scrollHeight;
+    }
   };
 
   bus.on('agents', (views: AgentView[]) => {

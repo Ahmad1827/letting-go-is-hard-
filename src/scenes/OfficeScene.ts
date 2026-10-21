@@ -5,6 +5,8 @@ import { buildProps } from '../art/props';
 import { buildRooms } from '../art/rooms';
 import { buildBand, currentPhase } from '../art/skyline';
 import { Agent } from '../agents/Agent';
+import type { Crew, CrewHooks } from '../agents/crew';
+import { RealCrew, type AgentBridge } from '../agents/real';
 import { Sim } from '../agents/sim';
 import type { AgentEvent, Decision, Idea, ProjectInfo } from '../agents/types';
 import type { AgentView, ApprovalView, PitchView } from '../ui/hud';
@@ -32,7 +34,7 @@ export class OfficeScene extends Phaser.Scene {
   private hired = new Map<string, number>();
   private arrivals: { at: number; then: () => void }[] = [];
   private nextElevator = 0;
-  private sim!: Sim;
+  private crew!: Crew;
   private screens: Phaser.GameObjects.Sprite[] = [];
   private bossScreen!: Phaser.GameObjects.Sprite;
   private racks: Phaser.GameObjects.Sprite[] = [];
@@ -73,12 +75,16 @@ export class OfficeScene extends Phaser.Scene {
     this.ring = this.add.image(0, 0, 'ring').setVisible(false);
     this.tweens.add({ targets: this.ring, alpha: 0.35, duration: 500, yoyo: true, repeat: -1 });
 
-    this.sim = new Sim(this.time, {
+    const hooks: CrewHooks = {
       emit: (ev) => this.apply(ev),
       note: (id, text) => this.note(id, text),
       pitch: (id, idea) => this.showPitch(id, idea),
       queue: (ids) => bus.emit('queue', ids.map((id) => this.agents.get(id)?.name ?? id)),
-    });
+    };
+    // inside the desktop app the staff are real Claude Code sessions; in a plain browser they're simulated
+    const bridge = (window as { office?: { agents?: AgentBridge } }).office?.agents;
+    this.crew = bridge ? new RealCrew(bridge, hooks) : new Sim(this.time, hooks);
+    bus.emit('crew', this.crew.real);
     this.loadProjects();
     this.setupCamera();
 
@@ -93,15 +99,21 @@ export class OfficeScene extends Phaser.Scene {
     });
     bus.on('hire', () => this.hire());
     bus.on('approval:resolve', ({ id, ok }: { id: string; ok: boolean }) => this.resolve(id, ok));
-    bus.on('pitch:decide', ({ id, decision }: { id: string; decision: Decision }) => this.sim.decide(id, decision));
+    bus.on('pitch:decide', ({ id, decision }: { id: string; decision: Decision }) => this.crew.decide(id, decision));
+    bus.on('agent:say', ({ id, text }: { id: string; text: string }) => this.crew.say(id, text));
+    bus.on('agent:model', ({ id, model }: { id: string; model: string }) => {
+      this.crew.setModel(id, model);
+      this.dirty = true;
+    });
+    bus.on('agent:stop', (id: string) => this.crew.interrupt(id));
     bus.on('autoapprove', (on: boolean) => {
-      this.sim.autoApprove = on;
+      this.crew.autoApprove = on;
       if (on) for (const id of [...this.pending.keys()]) this.resolve(id, true);
     });
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => bus.removeAllListeners());
 
-    // first shift arrives
-    [300, 2600, 4900].forEach((ms) => this.time.delayedCall(ms, () => this.hire()));
+    // simulated staff show up on their own; real ones are hired one by one, since each runs Claude Code
+    if (!this.crew.real) [300, 2600, 4900].forEach((ms) => this.time.delayedCall(ms, () => this.hire()));
   }
 
   update(time: number, delta: number) {
@@ -318,7 +330,7 @@ export class OfficeScene extends Phaser.Scene {
     this.openElevator(() => {
       this.agents.set(id, new Agent(this, id, name, `person${castIdx}`, desk, ELEVATORS[at]));
       this.note(id, `${name} arrived on the floor`);
-      this.sim.begin(id, name);
+      this.crew.begin(id, name);
     });
   }
 
@@ -326,7 +338,7 @@ export class OfficeScene extends Phaser.Scene {
   private apply(ev: AgentEvent) {
     const a = this.agents.get(ev.agentId);
     if (!a) return;
-    const settle = () => this.sim.settled(a.id);
+    const settle = () => this.crew.settled(a.id);
     const screen = this.screens[a.desk.id];
 
     if (a.activity === 'writing') screen.play('scr-saver');
@@ -416,7 +428,7 @@ export class OfficeScene extends Phaser.Scene {
   private resolve(id: string, ok: boolean) {
     if (!this.pending.delete(id)) return;
     this.pushApprovals();
-    this.sim.resolve(id, ok);
+    this.crew.resolve(id, ok);
   }
 
   private ship() {
@@ -466,7 +478,7 @@ export class OfficeScene extends Phaser.Scene {
   private async loadProjects() {
     const office = (window as { office?: { listProjects(): Promise<ProjectInfo[]> } }).office;
     const list = office ? await office.listProjects().catch(() => []) : SAMPLE_PROJECTS;
-    this.sim.projects = list;
+    this.crew.projects = list;
     bus.emit('projects', list);
   }
 
@@ -481,7 +493,7 @@ export class OfficeScene extends Phaser.Scene {
     if (!a) return;
     const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     a.log.push(`${t}  ${text}`);
-    if (a.log.length > 60) a.log.shift();
+    if (a.log.length > 300) a.log.shift();
     this.dirty = true;
   }
 
@@ -503,6 +515,8 @@ export class OfficeScene extends Phaser.Scene {
       task: a.task,
       avatar: this.avatar(a.tex),
       log: a.log,
+      model: this.crew.modelOf(a.id),
+      real: this.crew.real,
     }));
     bus.emit('agents', views);
   }

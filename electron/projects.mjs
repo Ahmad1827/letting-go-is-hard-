@@ -5,7 +5,8 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export const PROJECTS_ROOT = path.join(os.homedir(), 'proiecte');
+/** The folder whose sub-folders are the projects. LETTING_GO_PROJECTS overrides it. */
+export const PROJECTS_ROOT = process.env.LETTING_GO_PROJECTS || path.join(os.homedir(), 'proiecte');
 
 const SKIP = new Set(['node_modules', '.git', 'dist', 'build', 'release', 'venv', '.venv', '__pycache__', 'target', '.next', 'out', 'coverage']);
 const LANGS = {

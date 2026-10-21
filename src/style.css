@@ -241,3 +241,14 @@ button:focus-visible { outline: 1px dotted #000; outline-offset: -5px; }
 .redirect { display: flex; flex-direction: column; gap: 3px; }
 .redirect select, .redirect input, .redirect textarea { font: inherit; border: 2px solid; border-color: var(--shadow) var(--light) var(--light) var(--shadow); padding: 2px; }
 #waiting { margin-top: 4px; }
+
+.controls { gap: 6px; margin: 4px 0; }
+.controls select { font: inherit; }
+.chat { display: flex; gap: 4px; }
+.chat input { flex: 1; min-width: 0; font: inherit; padding: 3px; border: 2px solid; border-color: var(--shadow) var(--light) var(--light) var(--shadow); }
+.chat button { min-width: 50px; }
+
+/* long pitches and logs scroll inside their panels so chat stays on screen */
+#side { overflow-y: auto; }
+.card { max-height: 34vh; overflow-y: auto; }
+#side .grow { min-height: 300px; }
