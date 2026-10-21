@@ -231,3 +231,13 @@ button:focus-visible { outline: 1px dotted #000; outline-offset: -5px; }
   #game { height: 60vh; flex: none; }
   .task { display: none; }
 }
+
+.card { background: #fff; border: 2px solid; border-color: var(--shadow) var(--light) var(--light) var(--shadow); padding: 6px; display: flex; flex-direction: column; gap: 4px; }
+.card h4 { margin: 2px 0 0; color: #000080; }
+.card p { margin: 0; }
+.card .steps { margin: 0; padding-left: 18px; }
+.card code { background: #000; color: #3f3; padding: 2px 4px; align-self: flex-start; }
+.who.small img { width: 48px; height: 48px; }
+.redirect { display: flex; flex-direction: column; gap: 3px; }
+.redirect select, .redirect input, .redirect textarea { font: inherit; border: 2px solid; border-color: var(--shadow) var(--light) var(--light) var(--shadow); padding: 2px; }
+#waiting { margin-top: 4px; }

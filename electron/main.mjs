@@ -1,6 +1,7 @@
-import { app, BrowserWindow, Menu, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, shell } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { listProjects } from './projects.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const devUrl = process.env.VITE_DEV_SERVER_URL;
@@ -15,7 +16,7 @@ function createWindow() {
     icon: path.join(here, '../build/icon.png'),
     backgroundColor: '#008080',
     show: false,
-    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(here, 'preload.cjs') },
   });
   win.once('ready-to-show', () => win.show());
 
@@ -31,6 +32,8 @@ function createWindow() {
 }
 
 Menu.setApplicationMenu(null);
+
+ipcMain.handle('projects:list', () => listProjects());
 
 app.whenReady().then(() => {
   createWindow();

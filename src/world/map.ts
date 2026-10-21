@@ -137,6 +137,7 @@ place('plant', 36, 3);
 place('sofa', 36, 6, 38, 6);
 place('coffeetable', 36, 7, 37, 7);
 place('plant', 38, 8);
+decor('plaque', 35 * TILE + 24, 9 * TILE + 32, 10 * TILE + 1);
 export const BOSS_MONITOR = {
   x: 33 * TILE + TILE / 2 - BOSS_W / 2 + BOSS_SCREEN.x,
   y: 6 * TILE - BOSS_H + BOSS_SCREEN.y,
@@ -211,7 +212,10 @@ export const spots = {
   server: [...row(4, range(20, 27), 'up'), ...row(7, range(21, 25), 'up')],
   /** Around the conference table, where planning happens. */
   conference: [...row(7, confBottom, 'up', SEAT_DY), { x: 10, y: 4, face: 'down' }, { x: 17, y: 4, face: 'down' }] as Spot[],
-  approval: row(7, [31, 33, 35, 32, 34], 'down'),
+  /** In front of the owner's desk, where ideas get pitched. */
+  pitch: { x: 33, y: 6, face: 'up' } as Spot,
+  /** The line outside the owner's door; whoever is first goes in next. */
+  line: row(10, [32, 31, 30], 'right'),
   outbox: row(22, [33, 32, 34], 'down'),
   lounge: [
     { x: 1, y: 23, face: 'right' },

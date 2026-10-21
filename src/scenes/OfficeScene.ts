@@ -6,14 +6,19 @@ import { buildRooms } from '../art/rooms';
 import { buildBand, currentPhase } from '../art/skyline';
 import { Agent } from '../agents/Agent';
 import { Sim } from '../agents/sim';
-import type { AgentEvent } from '../agents/types';
-import type { AgentView, ApprovalView } from '../ui/hud';
+import type { AgentEvent, Decision, Idea, ProjectInfo } from '../agents/types';
+import type { AgentView, ApprovalView, PitchView } from '../ui/hud';
 import {
   BAND_ROWS, BOSS_MONITOR, COLS, ELEVATORS, HEIGHT, OUTBOX, ROWS, TILE, WIDTH, desks, props, randomNear, rooms, spots, walkable, walls,
   type Spot, type Tile,
 } from '../world/map';
 
 const MAX_PAPERS = 12;
+
+const SAMPLE_PROJECTS: ProjectInfo[] = [
+  { name: 'letting-go-is-hard', path: '~/proiecte/letting-go-is-hard', languages: ['TypeScript'], files: 24, biggest: 'src/art/props.ts', hasTests: false, hasReadme: true, readme: 'Letting Go Is Hard', isGit: true, lastCommit: 'Whole floor with detailed pixel art', hasCi: false },
+  { name: 'sample-api', path: '~/proiecte/sample-api', languages: ['Python'], files: 40, biggest: 'app/routes.py', hasTests: true, hasReadme: false, readme: null, isGit: true, lastCommit: 'Add login endpoint', hasCi: false },
+];
 /** Width of one elevator door leaf. */
 const HALF = TILE / 2;
 /** Height of a wall's top edge; the rest of the tile is its face. */
@@ -68,7 +73,13 @@ export class OfficeScene extends Phaser.Scene {
     this.ring = this.add.image(0, 0, 'ring').setVisible(false);
     this.tweens.add({ targets: this.ring, alpha: 0.35, duration: 500, yoyo: true, repeat: -1 });
 
-    this.sim = new Sim(this.time, (ev) => this.apply(ev), (id, text) => this.note(id, text));
+    this.sim = new Sim(this.time, {
+      emit: (ev) => this.apply(ev),
+      note: (id, text) => this.note(id, text),
+      pitch: (id, idea) => this.showPitch(id, idea),
+      queue: (ids) => bus.emit('queue', ids.map((id) => this.agents.get(id)?.name ?? id)),
+    });
+    this.loadProjects();
     this.setupCamera();
 
     this.input.on('gameobjectdown', (_p: Phaser.Input.Pointer, obj: Phaser.GameObjects.GameObject) => {
@@ -82,6 +93,7 @@ export class OfficeScene extends Phaser.Scene {
     });
     bus.on('hire', () => this.hire());
     bus.on('approval:resolve', ({ id, ok }: { id: string; ok: boolean }) => this.resolve(id, ok));
+    bus.on('pitch:decide', ({ id, decision }: { id: string; decision: Decision }) => this.sim.decide(id, decision));
     bus.on('autoapprove', (on: boolean) => {
       this.sim.autoApprove = on;
       if (on) for (const id of [...this.pending.keys()]) this.resolve(id, true);
@@ -306,7 +318,7 @@ export class OfficeScene extends Phaser.Scene {
     this.openElevator(() => {
       this.agents.set(id, new Agent(this, id, name, `person${castIdx}`, desk, ELEVATORS[at]));
       this.note(id, `${name} arrived on the floor`);
-      this.sim.begin(id);
+      this.sim.begin(id, name);
     });
   }
 
@@ -349,12 +361,22 @@ export class OfficeScene extends Phaser.Scene {
         a.goTo(this.claim(a.id, spots.server), settle);
         break;
       case 'awaiting':
+        // stands up by their desk with a hand raised until the command is approved
         this.pending.set(a.id, ev.detail ?? 'Permission needed');
         this.pushApprovals();
-        a.goTo(this.claim(a.id, spots.approval), () => {
+        a.goTo(this.near(a.desk.seat, 1, 'down'), () => {
           a.setPose('raise');
           settle();
         });
+        break;
+      case 'queued': {
+        // the first few wait in line outside the owner's door, the rest at their desks
+        const place = ev.queue ?? 1;
+        a.goTo(place <= spots.line.length ? spots.line[place - 1] : a.desk.seat, settle);
+        break;
+      }
+      case 'pitching':
+        a.goTo(spots.pitch, settle);
         break;
       case 'talking':
         this.talk(a, settle);
@@ -439,6 +461,20 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   // ---------------------------------------------------------------- HUD
+
+  /** Projects come from the machine through Electron; in a plain browser there's a sample instead. */
+  private async loadProjects() {
+    const office = (window as { office?: { listProjects(): Promise<ProjectInfo[]> } }).office;
+    const list = office ? await office.listProjects().catch(() => []) : SAMPLE_PROJECTS;
+    this.sim.projects = list;
+    bus.emit('projects', list);
+  }
+
+  private showPitch(id: string | null, idea: Idea | null) {
+    const a = id ? this.agents.get(id) : undefined;
+    const view: PitchView | null = a && idea ? { id: a.id, name: a.name, avatar: this.avatar(a.tex), idea } : null;
+    bus.emit('pitch', view);
+  }
 
   private note(id: string, text: string) {
     const a = this.agents.get(id);

@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { OWNER } from '../owner';
 import { bevel, disc, dither, floorShadow, loop, mix, pick, rng, shade, sheet, single, speckle, type R } from './draw';
 
 const BEIGE = '#e0d8c0';
@@ -10,6 +11,7 @@ const BEZEL = '#3a3730';
 const FONT: Record<string, string> = {
   O: '111101101101111', U: '101101101101111', T: '111010010010010', B: '110101110101110', S: '111100111001111',
   I: '111010010010111', N: '101111111111101', '8': '111101111101111',
+  A: '010101111101101', H: '101101111101101', M: '101111111101101', D: '110101101101110',
 };
 
 function text(r: R, x: number, y: number, s: string, color: string) {
@@ -188,7 +190,8 @@ function bossdesk(r: R) {
   r(74, 17, 8, 9, '#c9a227'); r(75, 18, 6, 6, '#7a9ac0'); r(76, 20, 2, 3, '#f1c27d'); r(78, 21, 2, 3, '#5a3825');
   // nameplate on the front edge
   r(42, 37, 28, 6, '#3a2a10'); r(42, 37, 28, 5, '#c9a227'); r(42, 37, 28, 1, '#f0d060');
-  text(r, 49, 37, 'BOSS', '#3a2a08');
+  const name = OWNER.toUpperCase().slice(0, 6);
+  text(r, 56 - (name.length * 4 - 1) / 2, 37, name, '#3a2a08');
 }
 
 function bosschair(r: R) {
@@ -455,6 +458,14 @@ function buildFurniture(scene: Phaser.Scene) {
     r(2, 1, 9, 1, '#b0b0c0'); r(2, 2, 14, 1, '#c0c0cc');
   }, { outline: true });
 
+  // brass name plaque beside the owner's door
+  const plate = OWNER.toUpperCase().slice(0, 8);
+  const pw = plate.length * 4 + 7;
+  single(scene, 'plaque', pw, 11, (r) => {
+    r(0, 0, pw, 11, '#6a4a10'); r(1, 1, pw - 2, 9, '#c9a227'); r(1, 1, pw - 2, 1, '#f0d060');
+    text(r, 4, 3, plate, '#3a2a08');
+  });
+
   // one half of the brushed-steel elevator door
   single(scene, 'door', 24, 36, (r) => {
     r(0, 0, 24, 36, '#a8acb0');
@@ -562,7 +573,7 @@ function buildScreens(scene: Phaser.Scene) {
   loop(scene, 'scr-alert', 'screen', ['alert0', 'alert1'], 2);
 }
 
-export const BUBBLE_FRAMES = ['idle', 'thinking', 'reading', 'writing', 'running', 'awaiting', 'talking', 'done'] as const;
+export const BUBBLE_FRAMES = ['idle', 'thinking', 'reading', 'writing', 'running', 'awaiting', 'talking', 'done', 'queued', 'pitching'] as const;
 
 function buildBubbles(scene: Phaser.Scene) {
   sheet(scene, 'bubble', 26, 24, BUBBLE_FRAMES, (r, frame) => {
@@ -604,6 +615,18 @@ function buildBubbles(scene: Phaser.Scene) {
         break;
       case 'talking':
         r(4, 5, 17, 2, '#555'); r(4, 9, 13, 2, '#555'); r(4, 13, 15, 2, '#555');
+        break;
+      case 'queued':
+        // hourglass
+        r(8, 2, 10, 2, '#7a5a2a'); r(8, 14, 10, 2, '#7a5a2a');
+        for (let k = 0; k < 5; k++) { r(9 + k, 4 + k, 8 - k * 2, 1, '#cfe8f4'); r(9 + k, 13 - k, 8 - k * 2, 1, '#cfe8f4'); }
+        r(11, 5, 4, 2, '#e8c070'); r(12, 9, 2, 2, '#e8c070'); r(10, 11, 6, 2, '#e8c070');
+        break;
+      case 'pitching':
+        // light bulb: an idea
+        disc(r, 13, 7, 4, '#ffe14d'); r(11, 4, 2, 2, '#fff8c0');
+        r(11, 11, 5, 2, '#c9a227'); r(11, 13, 5, 1, '#8a8a8a'); r(12, 14, 3, 1, '#6a6a6a');
+        r(5, 6, 3, 1, '#f0c040'); r(19, 6, 3, 1, '#f0c040'); r(7, 2, 2, 1, '#f0c040'); r(17, 2, 2, 1, '#f0c040');
         break;
       case 'done':
         for (const [x, y] of [[5, 9], [6, 10], [7, 11], [8, 12], [9, 11], [10, 10], [11, 9], [12, 8], [13, 7], [14, 6], [15, 5], [16, 4]]) {
