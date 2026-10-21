@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { text } from './props';
 import { bevel, disc, dither, floorShadow, mix, oval, pick, rng, shade, single, speckle, type R } from './draw';
 
 /** Furniture and floors for the rooms beyond the cubicles. */
@@ -82,6 +83,38 @@ function tvcart(r: R) {
   r(37, 12, 4, 3, '#555'); r(37, 18, 4, 3, '#555'); r(36, 26, 5, 1, '#888'); r(36, 28, 5, 1, '#888');
   r(14, 34, 22, 4, '#2a2a2e');
   r(16, 2, 1, 4, '#888'); r(32, 0, 1, 6, '#888'); // rabbit ears
+}
+
+/** The owner's work board: a corkboard on a stand, cards pinned in columns. Click it for the Work Board. */
+function workboard(r: R) {
+  const W = 92;
+  floorShadow(r, 4, 92, W - 8, 8);
+  // stand
+  r(12, 70, 3, 26, '#5a5e64'); r(W - 15, 70, 3, 26, '#5a5e64'); r(8, 94, 12, 2, '#3a3e44'); r(W - 20, 94, 12, 2, '#3a3e44');
+  // frame and cork
+  r(0, 0, W, 74, '#7a5232'); r(0, 0, W, 2, '#9a6a42'); r(W - 2, 2, 2, 72, '#5a3a1a'); r(0, 72, W, 2, '#4a2a12');
+  r(4, 12, W - 8, 58, '#c8a06a');
+  speckle(r, rng(14), 4, 12, W - 8, 58, 120, ['#b8905a', '#d8b07a', '#a8804a']);
+  // header strip
+  r(4, 3, W - 8, 8, '#1e3a5a');
+  text(r, W / 2 - 9, 4, 'TODO', '#f0c040');
+  // three columns of cards
+  const rnd = rng(15);
+  const cards = ['#f8f4d0', '#f7b5c9', '#a8e6cf', '#cfe0f8', '#f5ec9a'];
+  for (let col = 0; col < 3; col++) {
+    const x = 8 + col * 28;
+    r(x + 24, 14, 1, 54, '#a8804a');
+    for (let k = 0; k < 3 - (col === 2 ? 1 : 0); k++) {
+      const y = 16 + k * 17 + Math.floor(rnd() * 3);
+      const c = pick(rnd, cards);
+      r(x + 1, y + 1, 20, 13, 'rgba(0,0,0,0.25)');
+      r(x, y, 20, 13, c);
+      r(x + 2, y + 3, 12 + Math.floor(rnd() * 5), 1, '#888');
+      r(x + 2, y + 6, 8 + Math.floor(rnd() * 8), 1, '#aaa');
+      r(x + 2, y + 9, 10, 1, '#aaa');
+      r(x + 9, y - 1, 2, 2, pick(rnd, ['#d33', '#33d', '#3a3']));
+    }
+  }
 }
 
 // ------------------------------------------------------------------ server room
@@ -365,5 +398,6 @@ export function buildRooms(scene: Phaser.Scene) {
   single(scene, 'roundtable', 100, 58, roundtable, { outline: true });
   single(scene, 'cubbies', 96, 94, cubbies, { outline: true });
   single(scene, 'fax', 48, 62, fax, { outline: true });
+  single(scene, 'workboard', 92, 98, workboard, { outline: true });
   buildFloors(scene);
 }

@@ -2,11 +2,9 @@
 // Read-only: lists folders, samples their files, and reads a little git metadata.
 import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { settings } from './settings.mjs';
 
-/** The folder whose sub-folders are the projects. LETTING_GO_PROJECTS overrides it. */
-export const PROJECTS_ROOT = process.env.LETTING_GO_PROJECTS || path.join(os.homedir(), 'proiecte');
 
 const SKIP = new Set(['node_modules', '.git', 'dist', 'build', 'release', 'venv', '.venv', '__pycache__', 'target', '.next', 'out', 'coverage']);
 const LANGS = {
@@ -88,7 +86,7 @@ async function describe(dir) {
 }
 
 /** Every sub-folder of the projects root, newest first. */
-export async function listProjects(root = PROJECTS_ROOT) {
+export async function listProjects(root = settings().projectsRoot) {
   const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
   const dirs = entries.filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => path.join(root, e.name));
   const withTimes = await Promise.all(dirs.map(async (d) => ({ d, t: (await fs.stat(d)).mtimeMs })));

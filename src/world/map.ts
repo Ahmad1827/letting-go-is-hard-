@@ -133,6 +133,8 @@ decor('bosschair', 33 * TILE + TILE / 2, 5 * TILE - 6);
 block(33, 4);
 place('shelf', 37, 3, 38, 3);
 place('plant2', 29, 3);
+// the work board: click it to see everyone and what they're doing
+place('workboard', 30, 3, 31, 3);
 place('plant', 36, 3);
 place('sofa', 36, 6, 38, 6);
 place('coffeetable', 36, 7, 37, 7);

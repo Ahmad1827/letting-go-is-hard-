@@ -70,6 +70,25 @@ files). Turn it off or change the volume in the taskbar; it remembers your choic
 The taskbar shows your plan's usage (the 5-hour and weekly windows, as Claude Code reports
 them). Click it for reset times and how many tokens each agent has used this session.
 
+**Auto mode:** approved work runs in Claude Code's auto mode, so agents decide what's safe
+on their own and only genuinely risky actions ask. Switch to "ask me" in Settings.
+
+**Closing with work in progress:** the app asks whether to let agents finish in the
+background. If yes, the window hides, each agent finishes only the job you already approved
+(on its own branch; anything needing approval is allowed inside its branch folder and
+refused elsewhere), nobody starts anything new, and the app quits by itself when everyone
+is done. Open the app again to bring the window back.
+
+**Settings** (Start menu): your projects folder, your AI engines, which engine and model new
+hires use, approvals, and what closing does. An engine is any Claude Code-compatible command
+plus environment variables and a model list. Claude Code is built in; point it at another
+LLM with `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, or another account with
+`CLAUDE_CONFIG_DIR`.
+
+**Work Board:** click the corkboard in Ahmad's office (or *Work Board* in the toolbar or
+Start menu) to see everyone, grouped by team, with where they are in the cycle, what they're
+doing, the project and branch, and how long they've been at it.
+
 Click an agent to see their full log, switch their model (Fable 5.1, Opus 5.5, Sonnet 5.5,
 Haiku 5.5, older versions, or Claude Code's default), stop them, or message them. In a plain browser (`npx vite`) the
 agents are simulated instead (`src/agents/sim.ts`).
@@ -100,6 +119,7 @@ CRTs glowing, and says goodbye before the app quits. Running agents are stopped 
 
 - `electron/main.mjs`: the desktop window.
 - `electron/agents.mjs`: runs one headless Claude Code session per agent and prepares worktrees.
+- `electron/settings.mjs`: saved settings and AI engines.
 - `electron/projects.mjs`, `electron/preload.cjs`: read-only scan of the projects folder, exposed to the page.
 - `scripts/dev.mjs`: starts Vite and opens Electron on it.
 - `src/agents/types.ts`: the `AgentEvent` contract. Anything that emits these can drive the office.
@@ -112,5 +132,6 @@ CRTs glowing, and says goodbye before the app quits. Running agents are stopped 
 - `src/world/map.ts`: floor plan, furniture, walkable grid, pathfinding.
 - `src/art/`: all pixel art, drawn in code (no image assets).
 - `src/ui/hud.ts`: the Windows 95 side panels.
+- `src/ui/windows.ts`: Start menu, Settings and the Work Board.
 - `src/ui/paste.ts`: pasting and dropping pictures into text boxes.
 - `src/audio/lofi.ts`: the generated lo-fi music.

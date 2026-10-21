@@ -1,7 +1,7 @@
 import { OWNER } from '../owner';
-import { teamId, type AgentUsage, type Crew, type CrewHooks, type UsageWindow } from './crew';
+import { DEFAULT_SETTINGS, engineIn, teamId, type AgentUsage, type Crew, type CrewHooks, type UsageWindow } from './crew';
 import { branchFor } from './ideas';
-import type { AgentActivity, Decision, Idea, Picture, ProjectInfo, Role, Team } from './types';
+import type { AgentActivity, AgentStatus, Decision, Idea, Phase, Picture, ProjectInfo, Role, Settings, Team } from './types';
 
 /**
  * Real agents: each employee is a headless Claude Code session started by the
@@ -24,7 +24,7 @@ type Msg =
 /** A user message: plain text, or text with pictures. */
 type Content = string | ({ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } })[];
 
-interface StartConfig { cwd?: string; model?: string; system: string; prompt: Content; mode: string }
+interface StartConfig { cwd?: string; model?: string; engine?: string; system: string; prompt: Content; mode: string }
 
 interface WorkRequest { project: string; projectPath: string | null; branch: string; isNew: boolean; base?: string; inPlace?: boolean }
 interface WorkPlace { cwd: string; path: string; mode: string; branch?: string; note: string }
@@ -40,14 +40,17 @@ export interface AgentBridge {
   onMessage(cb: (id: string, msg: Msg) => void): void;
 }
 
-type Phase = 'research' | 'queued' | 'work' | 'break' | 'standby' | 'stopped';
-
 interface Permission { requestId: string; input: unknown; text: string }
 
 interface Staff {
   name: string;
   phase: Phase;
+  /** When the current phase started. */
+  since: number;
+  engine: string;
   model: string;
+  /** Where approved work is happening, once it starts. */
+  workCwd: string | null;
   idea: Idea | null;
   seen: Set<string>;
   alive: boolean;
@@ -139,6 +142,9 @@ const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(
 export class RealCrew implements Crew {
   readonly real = true;
   autoApprove = false;
+  settings: Settings = DEFAULT_SETTINGS;
+  /** The window is hidden: finish approved jobs, start nothing new. */
+  private background = false;
   projects: ProjectInfo[] = [];
   private staff = new Map<string, Staff>();
   private teams = new Map<string, TeamState>();
@@ -150,7 +156,7 @@ export class RealCrew implements Crew {
 
   begin(agentId: string, name: string) {
     this.staff.set(agentId, {
-      name, phase: 'research', model: '', idea: null, seen: new Set(), alive: false, nudged: false, permissions: [], place: 0,
+      name, phase: 'research', since: Date.now(), engine: this.settings.defaultEngine, model: this.settings.defaultModel, workCwd: null, idea: null, seen: new Set(), alive: false, nudged: false, permissions: [], place: 0,
       pitched: false, orders: null, ordersPictures: [], team: null, role: null, assignment: null, desk: null,
       activity: 'idle', lastShown: 0, usage: { tokens: 0, cost: 0 }, sessionCost: 0,
     });
@@ -205,10 +211,10 @@ export class RealCrew implements Crew {
     if (s.phase === 'break') {
       // still chatting about the finished work: keep that session
       window.clearTimeout(s.breakTimer);
-      s.phase = 'work';
+      this.setPhase(s, 'work');
     }
     if (s.alive) this.bridge.send(agentId, message);
-    else if (s.role === 'worker' && s.desk) this.launch(agentId, { cwd: s.desk.cwd, system: this.workerSystem(s), prompt: message, mode: s.desk.mode });
+    else if (s.role === 'worker' && s.desk) this.launch(agentId, { cwd: s.desk.cwd, system: this.workerSystem(s), prompt: message, mode: this.workMode(s.desk.mode) });
     else this.research(agentId, `${OWNER} says: ${text}`, pictures);
   }
 
@@ -226,6 +232,67 @@ export class RealCrew implements Crew {
 
   usageOf(agentId: string) {
     return this.staff.get(agentId)?.usage ?? null;
+  }
+
+  setEngine(agentId: string, engine: string) {
+    const s = this.staff.get(agentId);
+    if (!s || s.engine === engine) return;
+    s.engine = engine;
+    s.model = '';
+    this.note(agentId, `Engine: ${engineIn(this.settings, engine).name}${s.alive ? ' (from the next task)' : ''}`);
+  }
+
+  statusOf(agentId: string): AgentStatus {
+    const s = this.staff.get(agentId)!;
+    const working = s.phase === 'work' || s.phase === 'break';
+    return {
+      phase: s.pitched ? 'pitching' : s.phase,
+      since: s.since,
+      project: s.idea?.project ?? null,
+      branch: working ? s.desk?.branch ?? s.idea?.branch ?? null : null,
+      engine: s.engine,
+    };
+  }
+
+  workingCount() {
+    return [...this.staff.values()].filter((s) => s.phase === 'work').length;
+  }
+
+  setBackground(on: boolean) {
+    this.background = on;
+    for (const [id, s] of this.staff) {
+      if (on && s.phase !== 'work' && !(s.role === 'worker' && this.teamOf(s)?.job)) this.goHome(id);
+      if (!on && s.phase === 'home') {
+        this.note(id, 'Back at the office');
+        this.research(id);
+      }
+    }
+    this.checkAllDone();
+  }
+
+  /** Finished (or not needed) while the window is hidden: stop and go home. */
+  private goHome(agentId: string) {
+    const s = this.staff.get(agentId)!;
+    if (s.phase === 'home') return;
+    this.reset(agentId);
+    this.setPhase(s, 'home');
+    this.note(agentId, 'Went home');
+    this.emitNow(agentId, 'idle', 'Gone home');
+  }
+
+  private checkAllDone() {
+    if (this.background && !this.workingCount()) this.hooks.allDone();
+  }
+
+  private setPhase(s: Staff, phase: Phase) {
+    if (s.phase === phase) return;
+    s.phase = phase;
+    s.since = Date.now();
+  }
+
+  /** Permission mode for approved work: auto mode, or the place's own (acceptEdits in a worktree, ask in place). */
+  private workMode(placeMode: string) {
+    return this.settings.approvals === 'auto' ? 'auto' : placeMode;
   }
 
   interrupt(agentId: string) {
@@ -296,6 +363,7 @@ export class RealCrew implements Crew {
     s.permissions = [];
     s.assignment = null;
     s.desk = null;
+    s.workCwd = null;
     s.orders = null;
     s.ordersPictures = [];
     s.idea = null;
@@ -319,7 +387,8 @@ export class RealCrew implements Crew {
   private research(agentId: string, prompt?: string, pictures: Picture[] = []) {
     const s = this.staff.get(agentId)!;
     if (s.role === 'worker') return this.standby(agentId);
-    s.phase = 'research';
+    if (this.background) return this.goHome(agentId);
+    this.setPhase(s, 'research');
     s.idea = null;
     s.nudged = false;
     s.pitched = false;
@@ -334,7 +403,7 @@ export class RealCrew implements Crew {
 
   private backToResearch(agentId: string, message: Content) {
     const s = this.staff.get(agentId)!;
-    s.phase = 'research';
+    this.setPhase(s, 'research');
     s.idea = null;
     s.nudged = false;
     s.pitched = false;
@@ -346,7 +415,7 @@ export class RealCrew implements Crew {
 
   private standby(agentId: string) {
     const s = this.staff.get(agentId)!;
-    s.phase = 'standby';
+    this.setPhase(s, 'standby');
     s.assignment = null;
     this.emitNow(agentId, 'standby', `Waiting for ${this.nameOf(this.teamOf(s)?.manager ?? '')}`);
   }
@@ -359,7 +428,7 @@ export class RealCrew implements Crew {
 
   private async soloWork(agentId: string, idea: Idea) {
     const s = this.staff.get(agentId)!;
-    s.phase = 'work';
+    this.setPhase(s, 'work');
     s.idea = idea;
     s.permissions = [];
     this.emitNow(agentId, 'running', `Setting up ${idea.path ? `branch ${idea.branch}` : `new project ${idea.project}`}`);
@@ -367,7 +436,8 @@ export class RealCrew implements Crew {
       const place = await this.bridge.prepareWork({ project: idea.project, projectPath: idea.path, branch: idea.branch, isNew: !idea.path });
       idea.branch = place.branch ?? idea.branch;
       this.note(agentId, place.note);
-      this.launch(agentId, { cwd: place.cwd, model: s.model || undefined, system: WORK_PROMPT(s.name, !idea.path), prompt: content(jobBrief(idea), idea.pictures), mode: place.mode });
+      s.workCwd = place.cwd;
+      this.launch(agentId, { cwd: place.cwd, model: s.model || undefined, system: WORK_PROMPT(s.name, !idea.path), prompt: content(jobBrief(idea), idea.pictures), mode: this.workMode(place.mode) });
     } catch (e) {
       this.note(agentId, `Couldn't set up the work: ${(e as Error).message}`);
       this.research(agentId);
@@ -376,7 +446,7 @@ export class RealCrew implements Crew {
 
   private async teamWork(team: TeamState, idea: Idea) {
     const s = this.staff.get(team.manager)!;
-    s.phase = 'work';
+    this.setPhase(s, 'work');
     s.idea = idea;
     s.permissions = [];
     idea.team = team.name;
@@ -390,7 +460,8 @@ export class RealCrew implements Crew {
       this.note(team.manager, place.note);
       for (const w of team.workers) this.note(w, `${team.name} is starting on "${idea.title}" (${idea.project})`);
       const workers = team.workers.map((w) => this.nameOf(w));
-      this.launch(team.manager, { cwd: place.cwd, model: s.model || undefined, system: MANAGER_WORK_PROMPT(s.name, workers, team.job.branch), prompt: content(jobBrief(idea), idea.pictures), mode: place.mode });
+      s.workCwd = place.cwd;
+      this.launch(team.manager, { cwd: place.cwd, model: s.model || undefined, system: MANAGER_WORK_PROMPT(s.name, workers, team.job.branch), prompt: content(jobBrief(idea), idea.pictures), mode: this.workMode(place.mode) });
     } catch (e) {
       this.note(team.manager, `Couldn't set up the team's work: ${(e as Error).message}`);
       this.research(team.manager);
@@ -406,7 +477,7 @@ export class RealCrew implements Crew {
     this.note(team.manager, `Assigned ${w.name}: ${short(task)}`);
     const busy = w.assignment !== null;
     w.assignment = busy ? `${w.assignment}; ${task}` : task;
-    w.phase = 'work';
+    this.setPhase(w, 'work');
     w.idea = job.idea;
     if (busy && w.alive) return this.bridge.send(workerId, `Another task from ${this.nameOf(team.manager)}: ${task}`);
     this.emitNow(workerId, 'thinking');
@@ -414,11 +485,12 @@ export class RealCrew implements Crew {
       if (!w.desk) {
         const branch = `${job.branch ?? `team/${slug(team.name)}`}--${slug(w.name)}`;
         w.desk = await this.bridge.prepareWork({ project: job.idea.project, projectPath: job.path, branch, isNew: false, base: job.branch ?? undefined, inPlace: job.inPlace });
+        w.workCwd = w.desk.cwd;
         this.note(workerId, w.desk.note);
       }
       const prompt = `Task from ${this.nameOf(team.manager)}: ${task}\n\nThe team's job, for context:\n${jobBrief(job.idea)}`;
       if (w.alive) this.bridge.send(workerId, prompt);
-      else this.launch(workerId, { cwd: w.desk.cwd, model: w.model || undefined, system: this.workerSystem(w), prompt, mode: w.desk.mode });
+      else this.launch(workerId, { cwd: w.desk.cwd, model: w.model || undefined, system: this.workerSystem(w), prompt, mode: this.workMode(w.desk.mode) });
     } catch (e) {
       this.note(workerId, `Couldn't set up: ${(e as Error).message}`);
       this.bridge.send(team.manager, `${w.name} couldn't start their task: ${(e as Error).message}`);
@@ -439,7 +511,8 @@ export class RealCrew implements Crew {
       s.alive = false;
       s.desk = null;
       this.note(w, `${team.name} finished "${team.job?.idea.title}"`);
-      this.standby(w);
+      if (this.background) this.goHome(w);
+      else this.standby(w);
     }
     team.job = null;
     this.finishWork(team.manager, summary.replace(TEAM_DONE, '').trim());
@@ -449,7 +522,7 @@ export class RealCrew implements Crew {
     const s = this.staff.get(agentId)!;
     s.alive = true;
     s.sessionCost = 0;
-    this.bridge.start(agentId, { ...cfg, model: cfg.model ?? (s.model || undefined) }).catch((e: Error) => {
+    this.bridge.start(agentId, { ...cfg, engine: s.engine, model: cfg.model ?? (s.model || undefined) }).catch((e: Error) => {
       s.alive = false;
       this.note(agentId, `Couldn't start Claude Code: ${e.message}`);
     });
@@ -457,10 +530,15 @@ export class RealCrew implements Crew {
 
   private finishWork(agentId: string, summary: string) {
     const s = this.staff.get(agentId)!;
-    s.phase = 'break';
+    this.setPhase(s, 'break');
     const idea = s.idea;
     this.emitNow(agentId, 'done', idea?.path ? `${idea.branch} is ready for review` : `${idea?.project} is ready`);
     if (summary) this.note(agentId, `Summary: ${short(summary, 600)}`);
+    if (this.background) {
+      // nobody to pitch to: call it a day
+      this.goHome(agentId);
+      return this.checkAllDone();
+    }
     s.breakTimer = window.setTimeout(() => {
       this.emitNow(agentId, 'idle', 'Coffee break');
       s.breakTimer = window.setTimeout(() => s.phase === 'break' && this.research(agentId), 15000);
@@ -505,6 +583,11 @@ export class RealCrew implements Crew {
         } else if (this.autoApprove) {
           this.bridge.answer(agentId, msg.requestId, true, msg.input);
           this.note(agentId, `Auto-approved: ${text}`);
+        } else if (this.background) {
+          // nobody to ask: fine inside their own branch folder, not anywhere else
+          const isolated = !!s.workCwd?.includes('/.letting-go/worktrees/');
+          this.bridge.answer(agentId, msg.requestId, isolated, msg.input, isolated ? undefined : `${OWNER} is away. Skip anything that needs approval and mention it in your summary.`);
+          this.note(agentId, `${isolated ? 'Allowed (own branch, while away)' : 'Skipped (needs approval, Ahmad is away)'}: ${text}`);
         } else {
           s.permissions.push({ requestId: msg.requestId, input: msg.input, text });
           if (s.permissions.length === 1) this.emitNow(agentId, 'awaiting', text);
@@ -524,8 +607,9 @@ export class RealCrew implements Crew {
         s.alive = false;
         if (msg.error) this.note(agentId, `Claude Code stopped: ${msg.error}`);
         if (s.phase === 'research' || s.phase === 'work') {
-          s.phase = 'stopped';
+          this.setPhase(s, 'stopped');
           this.emitNow(agentId, 'idle', 'Not running. Message them to start again.');
+          this.checkAllDone();
         }
         break;
     }
@@ -542,7 +626,7 @@ export class RealCrew implements Crew {
         s.ordersPictures = [];
         void this.startWork(agentId, s.idea);
       } else if (s.idea) {
-        s.phase = 'queued';
+        this.setPhase(s, 'queued');
         s.place = 0;
         this.line.push(agentId);
         this.note(agentId, `Has an idea for ${s.idea.project}, waiting to see ${OWNER}`);

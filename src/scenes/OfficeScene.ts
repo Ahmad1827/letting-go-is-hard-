@@ -5,10 +5,10 @@ import { buildProps } from '../art/props';
 import { buildRooms } from '../art/rooms';
 import { buildBand, GLASS_TOP, MULLION_STEP, MULLION_W, SILL } from '../art/skyline';
 import { Agent } from '../agents/Agent';
-import type { Crew, CrewHooks } from '../agents/crew';
+import { DEFAULT_SETTINGS, type Crew, type CrewHooks } from '../agents/crew';
 import { RealCrew, type AgentBridge } from '../agents/real';
 import { Sim } from '../agents/sim';
-import type { AgentEvent, Decision, Idea, Picture, ProjectInfo, Team } from '../agents/types';
+import type { AgentEvent, Decision, Idea, Picture, ProjectInfo, Settings, Team } from '../agents/types';
 import type { AgentView, ApprovalView, PitchView } from '../ui/hud';
 import {
   BAND_ROWS, BOSS_MONITOR, COLS, ELEVATORS, HEIGHT, OUTBOX, ROWS, TILE, WIDTH, desks, props, rooms, spots, walls,
@@ -16,6 +16,19 @@ import {
 } from '../world/map';
 
 const MAX_PAPERS = 12;
+
+/** What the preload script exposes (see electron/preload.cjs). */
+interface OfficeBridge {
+  listProjects(): Promise<ProjectInfo[]>;
+  agents?: AgentBridge;
+  settings?: { get(): Promise<Settings>; set(next: Settings): Promise<Settings> };
+  app?: {
+    close(): void;
+    onWorkingQuery(count: () => number): void;
+    onBackground(cb: (on: boolean) => void): void;
+    allDone(): void;
+  };
+}
 
 /** Merge tiles into rectangles [x, y, w, h]: runs along each row, stacked where rows match. */
 function mergeTiles(tiles: [number, number][]): [number, number, number, number][] {
@@ -109,6 +122,10 @@ export class OfficeScene extends Phaser.Scene {
 
     for (const p of props) {
       const s = this.add.sprite(p.x, p.y, p.key).setOrigin(0.5, 1).setDepth(p.depth ?? p.y);
+      if (p.key === 'workboard') {
+        s.setInteractive({ useHandCursor: true }).on('pointerup', () => bus.emit('board:open'));
+        s.on('pointerover', () => s.setTint(0xfff2c0)).on('pointerout', () => s.clearTint());
+      }
       if (p.anim) {
         s.play({ key: p.anim, startFrame: Math.floor(Math.random() * 3) });
         this.racks.push(s);
@@ -130,12 +147,19 @@ export class OfficeScene extends Phaser.Scene {
         this.dirty = true;
         bus.emit('teams', list);
       },
+      allDone: () => this.office()?.app?.allDone(),
     };
     // inside the desktop app the staff are real Claude Code sessions; in a plain browser they're simulated
-    const bridge = (window as { office?: { agents?: AgentBridge } }).office?.agents;
+    const bridge = this.office()?.agents;
     this.crew = bridge ? new RealCrew(bridge, hooks) : new Sim(this.time, hooks);
     bus.emit('crew', this.crew.real);
-    this.loadProjects();
+    void this.loadSettings().then(() => this.loadProjects());
+    // closing with work in progress: Electron asks how many are mid-job, and may hide the window
+    this.office()?.app?.onWorkingQuery(() => this.crew.workingCount());
+    this.office()?.app?.onBackground((on) => {
+      this.crew.setBackground(on);
+      this.dirty = true;
+    });
     this.setupCamera();
 
     this.input.on('gameobjectdown', (_p: Phaser.Input.Pointer, obj: Phaser.GameObjects.GameObject) => {
@@ -157,6 +181,17 @@ export class OfficeScene extends Phaser.Scene {
       this.dirty = true;
     });
     bus.on('agent:stop', (id: string) => this.crew.interrupt(id));
+    bus.on('agent:engine', ({ id, engine }: { id: string; engine: string }) => {
+      this.crew.setEngine(id, engine);
+      this.dirty = true;
+    });
+    bus.on('settings:save', async (next: Settings) => {
+      const saved = (await this.office()?.settings?.set(next)) ?? next;
+      this.crew.settings = saved;
+      bus.emit('settings', saved);
+      void this.loadProjects();
+    });
+    bus.on('app:close', () => this.office()?.app?.close());
     bus.on('team:create', ({ pictures, ...t }: Omit<Team, 'id'> & { pictures?: Picture[] }) => this.crew.createTeam(t, pictures));
     bus.on('team:disband', (id: string) => this.crew.disbandTeam(id));
     bus.on('autoapprove', (on: boolean) => {
@@ -535,9 +570,20 @@ export class OfficeScene extends Phaser.Scene {
 
   // ---------------------------------------------------------------- HUD
 
+  /** The bridge to the machine; only there inside the desktop app. */
+  private office() {
+    return (window as { office?: OfficeBridge }).office;
+  }
+
+  private async loadSettings() {
+    const s = (await this.office()?.settings?.get()) ?? DEFAULT_SETTINGS;
+    this.crew.settings = s;
+    bus.emit('settings', s);
+  }
+
   /** Projects come from the machine through Electron; in a plain browser there's a sample instead. */
   private async loadProjects() {
-    const office = (window as { office?: { listProjects(): Promise<ProjectInfo[]> } }).office;
+    const office = this.office();
     const list = office ? await office.listProjects().catch(() => []) : SAMPLE_PROJECTS;
     this.crew.projects = list;
     bus.emit('projects', list);
@@ -578,6 +624,7 @@ export class OfficeScene extends Phaser.Scene {
       log: a.log,
       model: this.crew.modelOf(a.id),
       usage: this.crew.usageOf(a.id),
+      status: this.crew.statusOf(a.id),
       ...this.roleOf(a.id),
       real: this.crew.real,
     }));

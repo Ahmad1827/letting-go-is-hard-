@@ -1,9 +1,11 @@
 import { bus } from '../bus';
-import { MODELS, type AgentUsage, type Limits } from '../agents/crew';
-import type { AgentActivity, Decision, Idea, Role, Team } from '../agents/types';
+import { DEFAULT_SETTINGS, engineIn, type AgentUsage, type Limits } from '../agents/crew';
+import type { AgentActivity, AgentStatus, Decision, Idea, Role, Settings, Team } from '../agents/types';
 import { Lofi } from '../audio/lofi';
 import { OWNER } from '../owner';
+import { byId, el } from './dom';
 import { acceptPictures } from './paste';
+import { initWindows } from './windows';
 
 export interface AgentView {
   id: string;
@@ -17,15 +19,20 @@ export interface AgentView {
   /** A real Claude Code session rather than a simulated one. */
   real: boolean;
   usage: AgentUsage | null;
+  status: AgentStatus;
   team?: string;
   role?: Role;
 }
+
+/** The latest settings, for the panels that list engines and models. */
+let settings: Settings = DEFAULT_SETTINGS;
+bus.on('settings', (s: Settings) => (settings = s));
 
 export interface ApprovalView { id: string; name: string; detail: string }
 
 export interface PitchView { id: string; name: string; avatar: string; idea: Idea }
 
-const LABEL: Record<AgentActivity, string> = {
+export const LABEL: Record<AgentActivity, string> = {
   idle: 'On break',
   thinking: 'Thinking',
   reading: 'Reading files',
@@ -39,7 +46,7 @@ const LABEL: Record<AgentActivity, string> = {
   standby: 'Waiting for a task',
 };
 
-const DOT: Record<AgentActivity, string> = {
+export const DOT: Record<AgentActivity, string> = {
   idle: '#808080',
   thinking: '#8e5cc4',
   reading: '#3b6fc2',
@@ -53,14 +60,6 @@ const DOT: Record<AgentActivity, string> = {
   standby: '#7a7aa0',
 };
 
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  if (text !== undefined) e.textContent = text;
-  return e;
-}
-
-const byId = (id: string) => document.getElementById(id)!;
 
 let audio: AudioContext | null = null;
 
@@ -416,12 +415,13 @@ function initGoodbye() {
     requestAnimationFrame(() => box.classList.add('shown'));
   });
   // Electron tells us when the window is closing; the office plays lights-out, then lets it go
-  const office = (window as { office?: { onClosing?(cb: (done: () => void) => void): void } }).office;
-  office?.onClosing?.((done) => bus.emit('shutdown', done));
+  const office = (window as { office?: { app?: { onClosing(cb: (done: () => void) => void): void } } }).office;
+  office?.app?.onClosing((done) => bus.emit('shutdown', done));
 }
 
 export function initHud() {
   initGoodbye();
+  initWindows();
   initMusic();
   initOffice();
   initUsage();
@@ -529,18 +529,33 @@ export function initHud() {
     who.append(img, info);
 
     const controls = el('div', 'row controls');
-    const model = el('select');
-    for (const [value, label] of MODELS) {
-      const o = el('option', undefined, label);
-      o.value = value;
-      model.append(o);
+    const engine = el('select');
+    for (const e of settings.engines) {
+      const o = el('option', undefined, e.name);
+      o.value = e.id;
+      engine.append(o);
     }
+    engine.value = a.status.engine;
+    const model = el('select');
+    const fillModels = () => model.replaceChildren(...engineIn(settings, engine.value).models.map((m) => {
+      const o = el('option', undefined, m.label);
+      o.value = m.id;
+      return o;
+    }));
+    fillModels();
     model.value = a.model;
+    engine.onchange = () => {
+      bus.emit('agent:engine', { id: a.id, engine: engine.value });
+      fillModels();
+      model.value = '';
+    };
     model.onchange = () => bus.emit('agent:model', { id: a.id, model: model.value });
     const stop = el('button', undefined, 'Stop');
     stop.title = 'Interrupt what they are doing right now';
     stop.onclick = () => bus.emit('agent:stop', a.id);
     const label = el('label', 'check', 'Model ');
+    // only worth showing the engine when there's a choice
+    if (settings.engines.length > 1) label.prepend(engine);
     label.append(model);
     controls.append(label, stop);
 

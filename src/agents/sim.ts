@@ -1,8 +1,8 @@
 import Phaser from 'phaser';
 import { OWNER } from '../owner';
-import { teamId, type Crew, type CrewHooks } from './crew';
+import { DEFAULT_SETTINGS, teamId, type Crew, type CrewHooks } from './crew';
 import { ideaFor, ordered } from './ideas';
-import type { AgentActivity, Decision, Idea, Picture, ProjectInfo, Team } from './types';
+import type { AgentActivity, AgentStatus, Decision, Idea, Phase, Picture, ProjectInfo, Team } from './types';
 
 /**
  * Fake agents: they produce the same AgentEvents a real agent run will, so the
@@ -35,6 +35,9 @@ interface Run {
   /** Standing in the office with the pitch on the table. */
   pitched: boolean;
   team: Team | null;
+  phase: Phase;
+  since: number;
+  engine: string;
 }
 
 const RISKY = (idea: Idea) => [`git push origin ${idea.branch}`, 'rm -rf build/', 'npm install --save-dev vitest', 'git rebase main'];
@@ -42,6 +45,7 @@ const RISKY = (idea: Idea) => [`git push origin ${idea.branch}`, 'rm -rf build/'
 export class Sim implements Crew {
   readonly real = false;
   autoApprove = false;
+  settings = DEFAULT_SETTINGS;
   projects: ProjectInfo[] = [];
   private runs = new Map<string, Run>();
   private line: string[] = [];
@@ -68,10 +72,32 @@ export class Sim implements Crew {
     return null;
   }
 
+  setEngine(agentId: string, engine: string) {
+    const run = this.runs.get(agentId);
+    if (run) run.engine = engine;
+  }
+
+  statusOf(agentId: string): AgentStatus {
+    const run = this.runs.get(agentId)!;
+    return { phase: run.pitched ? 'pitching' : run.phase, since: run.since, project: run.idea?.project ?? null, branch: run.phase === 'work' ? run.idea?.branch ?? null : null, engine: run.engine };
+  }
+
+  workingCount() {
+    return [...this.runs.values()].filter((r) => r.phase === 'work').length;
+  }
+
+  /** Simulated staff only exist in the browser, which has no background mode. */
+  setBackground() {}
+
+  private setPhase(agentId: string, phase: Phase) {
+    const run = this.runs.get(agentId)!;
+    if (run.phase !== phase) Object.assign(run, { phase, since: Date.now() });
+  }
+
   interrupt() {}
 
   begin(agentId: string, name: string) {
-    this.runs.set(agentId, { name, steps: [], i: -1, settled: false, idea: null, seen: new Set(), place: 0, pitched: false, team: null });
+    this.runs.set(agentId, { name, steps: [], i: -1, settled: false, idea: null, seen: new Set(), place: 0, pitched: false, team: null, phase: 'research', since: Date.now(), engine: this.settings.defaultEngine });
     this.research(agentId);
   }
 
@@ -187,6 +213,7 @@ export class Sim implements Crew {
 
   private standby(agentId: string) {
     const run = this.runs.get(agentId)!;
+    this.setPhase(agentId, 'standby');
     this.start(agentId, [{ activity: 'standby', min: 0, max: 0, detail: `Waiting for ${this.runs.get(run.team?.manager ?? '')?.name ?? 'the manager'}` }]);
   }
 
@@ -195,6 +222,7 @@ export class Sim implements Crew {
   private research(agentId: string, focus?: ProjectInfo) {
     const run = this.runs.get(agentId)!;
     if (run.team && run.team.manager !== agentId) return this.standby(agentId);
+    this.setPhase(agentId, 'research');
     const project = focus ?? this.projects[Math.floor(Math.random() * this.projects.length)];
     if (!project) {
       this.start(agentId, [{ activity: 'idle', min: 8, max: 12, detail: 'No projects found to look at' }], () => this.research(agentId));
@@ -207,7 +235,7 @@ export class Sim implements Crew {
     if (project.biggest) steps.push({ activity: 'reading', min: 2, max: 4, detail: `Read ${project.name}/${project.biggest}` });
     steps.push(
       { activity: 'thinking', min: 3, max: 4, detail: `Drafting a pitch for ${project.name}`, enter: () => (run.idea = ideaFor(run.name, project, run.seen)) },
-      { activity: 'queued', min: 0, max: 0, detail: '', enter: () => this.line.push(agentId) },
+      { activity: 'queued', min: 0, max: 0, detail: '', enter: () => (this.line.push(agentId), this.setPhase(agentId, 'queued')) },
     );
     this.start(agentId, steps);
   }
@@ -215,6 +243,7 @@ export class Sim implements Crew {
   private work(agentId: string, idea: Idea) {
     const run = this.runs.get(agentId)!;
     run.idea = idea;
+    this.setPhase(agentId, 'work');
     if (run.team?.manager === agentId) {
       idea.team = run.team.name;
       // the workers each take a piece and go back to standing by when it's done
@@ -223,6 +252,7 @@ export class Sim implements Crew {
         if (wr?.team !== run.team) return;
         this.note(w, `Task from ${run.name}: ${idea.steps[i % idea.steps.length] ?? idea.title}`);
         wr.idea = idea;
+        this.setPhase(w, 'work');
         this.start(w, [
           { activity: 'reading', min: 3, max: 5, detail: `Read ${idea.project}` },
           { activity: 'writing', min: 6, max: 10, detail: `Edit ${idea.project}: ${idea.steps[i % idea.steps.length] ?? idea.title}` },
@@ -247,7 +277,7 @@ export class Sim implements Crew {
     steps.push(
       { activity: 'running', min: 2, max: 4, detail: '$ run the checks' },
       { activity: 'done', min: 2, max: 2, detail: `Branch ${idea.branch} is ready for review` },
-      { activity: 'idle', min: 6, max: 10, detail: 'Coffee break' },
+      { activity: 'idle', min: 6, max: 10, detail: 'Coffee break', enter: () => this.setPhase(agentId, 'break') },
     );
     this.start(agentId, steps, () => this.research(agentId));
   }

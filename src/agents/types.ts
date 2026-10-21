@@ -78,3 +78,37 @@ export interface Team {
   /** The owner's task for the team, if they gave one; otherwise the manager pitches. */
   task?: string;
 }
+
+/** A Claude Code-compatible command line the agents can run on. */
+export interface EngineConfig {
+  id: string;
+  name: string;
+  command: string;
+  /** Extra environment, e.g. ANTHROPIC_BASE_URL for another LLM or CLAUDE_CONFIG_DIR for another account. */
+  env: Record<string, string>;
+  /** Models offered for this engine; id '' means the engine's own default. */
+  models: { id: string; label: string }[];
+}
+
+export interface Settings {
+  projectsRoot: string;
+  engines: EngineConfig[];
+  defaultEngine: string;
+  defaultModel: string;
+  /** 'auto': the engine's auto mode decides what's safe; 'ask': anything that changes files asks first. */
+  approvals: 'auto' | 'ask';
+  /** On closing with work in progress. */
+  onClose: 'ask' | 'finish' | 'stop';
+}
+
+/** Where an agent is in its cycle, for the work board. */
+export type Phase = 'research' | 'queued' | 'pitching' | 'work' | 'break' | 'standby' | 'home' | 'stopped';
+
+export interface AgentStatus {
+  phase: Phase;
+  /** When the current phase started (ms since epoch). */
+  since: number;
+  project: string | null;
+  branch: string | null;
+  engine: string;
+}

@@ -14,6 +14,7 @@
           <span id="zoom-level" class="zoom">100%</span>
           <button id="zoom-in" title="Zoom in (+)">+</button>
           <button id="zoom-fit" title="Whole floor (F)">Whole floor</button>
+          <button id="board-open" title="Everyone and what they're working on">Work Board</button>
           <span class="hint">Scroll to zoom, drag or use arrow keys to move around</span>
         </div>
         <div id="game"></div>
@@ -54,13 +55,24 @@
     </div>
 
     <footer id="taskbar">
-      <button class="start"><span class="flag"></span><b>Start</b></button>
+      <button id="start" class="start"><span class="flag"></span><b>Start</b></button>
+      <div id="start-menu" class="win start-menu" hidden></div>
       <span class="task">OFFICE.EXE</span>
       <span class="spacer"></span>
       <span class="tray music"><button id="music">♪ Music</button><input id="volume" type="range" min="0" max="100" title="Volume" /></span>
       <button id="usage" class="tray usage" title="Claude Code usage">Usage</button>
       <span id="clock" class="tray"></span>
     </footer>
+
+    <section id="board-pop" class="win popup" hidden>
+      <div class="title"><span>Work Board</span><span class="ctrls"><i id="board-pop-close">×</i></span></div>
+      <div class="body" id="board-pop-body"></div>
+    </section>
+
+    <section id="settings-pop" class="win popup" hidden>
+      <div class="title"><span>Settings</span><span class="ctrls"><i id="settings-pop-close">×</i></span></div>
+      <div class="body" id="settings-pop-body"></div>
+    </section>
 
     <section id="team-pop" class="win" hidden>
       <div class="title"><span>New Team</span><span class="ctrls"><i id="team-close">×</i></span></div>

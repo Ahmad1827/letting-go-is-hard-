@@ -8,12 +8,11 @@ import { execFile, spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
-import { PROJECTS_ROOT } from './projects.mjs';
+import { engine, settings } from './settings.mjs';
 
-const CLAUDE = process.env.CLAUDE_BIN || 'claude';
 const TOOLS = 'Bash,Read,Edit,Write,WebSearch,WebFetch';
 /** Approved work happens in git worktrees here, so a project's own checkout is never touched. */
-const WORKTREES = path.join(PROJECTS_ROOT, '.letting-go', 'worktrees');
+const worktrees = () => path.join(settings().projectsRoot, '.letting-go', 'worktrees');
 
 const procs = new Map();
 
@@ -51,7 +50,8 @@ export function setupAgents(ipcMain, getWindow) {
   const emit = (id, msg) => getWindow()?.webContents.send('agent:msg', id, msg);
 
   /** (Re)start an agent's Claude Code session. */
-  function start(id, { cwd, model, system, prompt, mode }) {
+  function start(id, { cwd, model, system, prompt, mode, engine: engineId }) {
+    const eng = engine(engineId);
     stop(id);
     const args = [
       '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
@@ -60,7 +60,7 @@ export function setupAgents(ipcMain, getWindow) {
       '--append-system-prompt', system,
     ];
     if (model) args.push('--model', model);
-    const p = spawn(CLAUDE, args, { cwd: cwd || PROJECTS_ROOT, env: process.env });
+    const p = spawn(eng.command, args, { cwd: cwd || settings().projectsRoot, env: { ...process.env, ...eng.env } });
     const entry = { p, closed: false };
     procs.set(id, entry);
     readline.createInterface({ input: p.stdout }).on('line', (line) => {
@@ -75,7 +75,7 @@ export function setupAgents(ipcMain, getWindow) {
     });
     let err = '';
     p.stderr.on('data', (d) => (err = (err + d).slice(-2000)));
-    p.on('error', (e) => emit(id, { kind: 'exit', code: -1, error: `Could not start Claude Code (${CLAUDE}): ${e.message}` }));
+    p.on('error', (e) => emit(id, { kind: 'exit', code: -1, error: `Could not start ${eng.name} (${eng.command}): ${e.message}` }));
     p.on('exit', (code) => {
       if (procs.get(id) === entry) procs.delete(id);
       if (!entry.closed) emit(id, { kind: 'exit', code, error: code ? err.trim().split('\n').pop() : '' });
@@ -107,7 +107,7 @@ export function setupAgents(ipcMain, getWindow) {
    */
   async function prepareWork({ project, projectPath, branch, isNew, base, inPlace }) {
     if (isNew) {
-      const dir = path.join(PROJECTS_ROOT, project);
+      const dir = path.join(settings().projectsRoot, project);
       await fs.mkdir(dir, { recursive: true });
       const fresh = !(await fs.access(path.join(dir, '.git')).then(() => true, () => false));
       if (fresh) {
@@ -126,8 +126,8 @@ export function setupAgents(ipcMain, getWindow) {
     }
     let name = branch;
     for (let i = 2; await git(projectPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`]).then(() => true, () => false); i++) name = `${branch}-${i}`;
-    const dir = path.join(WORKTREES, `${project}--${name.replace(/[^\w.-]+/g, '-')}`);
-    await fs.mkdir(WORKTREES, { recursive: true });
+    const dir = path.join(worktrees(), `${project}--${name.replace(/[^\w.-]+/g, '-')}`);
+    await fs.mkdir(worktrees(), { recursive: true });
     await git(projectPath, ['worktree', 'add', '-q', '-b', name, dir, ...(base ? [base] : [])]);
     return { cwd: dir, path: projectPath, mode: 'acceptEdits', branch: name, note: `Working in ${dir} on branch ${name}` };
   }
@@ -144,5 +144,5 @@ export function setupAgents(ipcMain, getWindow) {
     }));
   ipcMain.handle('work:prepare', (_e, req) => prepareWork(req));
 
-  return { stopAll: () => [...procs.keys()].forEach(stop), root: PROJECTS_ROOT };
+  return { stopAll: () => [...procs.keys()].forEach(stop) };
 }

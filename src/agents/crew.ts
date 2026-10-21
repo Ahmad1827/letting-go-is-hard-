@@ -1,4 +1,4 @@
-import type { AgentEvent, Decision, Idea, Picture, ProjectInfo, Team } from './types';
+import type { AgentEvent, AgentStatus, Decision, Idea, Picture, ProjectInfo, Settings, Team } from './types';
 
 /** One of the plan's usage windows, as Claude Code reports it. */
 export interface UsageWindow { utilization: number; resetsAt: number }
@@ -19,6 +19,8 @@ export interface CrewHooks {
   limits(l: Limits): void;
   /** The teams changed. */
   teams(list: Team[]): void;
+  /** Working in the background and everyone has finished. */
+  allDone(): void;
 }
 
 /** The staff, simulated or real. The office drives both the same way. */
@@ -39,6 +41,14 @@ export interface Crew {
   modelOf(agentId: string): string;
   /** Null for simulated agents, which use nothing. */
   usageOf(agentId: string): AgentUsage | null;
+  setEngine(agentId: string, engine: string): void;
+  statusOf(agentId: string): AgentStatus;
+  /** Settings from the Settings window: engines, defaults, approvals. */
+  settings: Settings;
+  /** Agents in the middle of an approved job. */
+  workingCount(): number;
+  /** The window is hidden: finish current jobs, start nothing new (true), or carry on as normal (false). */
+  setBackground(on: boolean): void;
   /** Stop whatever the agent is doing right now. */
   interrupt(agentId: string): void;
   /** Group agents under a manager. With a task they start on it; without one the manager pitches. */
@@ -47,20 +57,32 @@ export interface Crew {
   disbandTeam(teamId: string): void;
 }
 
-/** Model choices offered in the Properties panel; '' leaves it to Claude Code's default. */
-export const MODELS: [string, string][] = [
-  ['', 'Claude Code default'],
-  ['claude-fable-5-1', 'Fable 5.1'],
-  ['claude-opus-5-5', 'Opus 5.5'],
-  ['claude-opus-5', 'Opus 5'],
-  ['claude-opus-4-8', 'Opus 4.8'],
-  ['claude-sonnet-5-5', 'Sonnet 5.5'],
-  ['claude-sonnet-5', 'Sonnet 5'],
-  ['claude-haiku-5-5', 'Haiku 5.5'],
-  ['claude-haiku-4-5', 'Haiku 4.5'],
+/** Claude Code's models, for the built-in engine. */
+export const CLAUDE_MODELS = [
+  { id: '', label: 'Claude Code default' },
+  { id: 'claude-fable-5-1', label: 'Fable 5.1' },
+  { id: 'claude-opus-5-5', label: 'Opus 5.5' },
+  { id: 'claude-opus-5', label: 'Opus 5' },
+  { id: 'claude-opus-4-8', label: 'Opus 4.8' },
+  { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
+  { id: 'claude-sonnet-5', label: 'Sonnet 5' },
+  { id: 'claude-haiku-5-5', label: 'Haiku 5.5' },
+  { id: 'claude-haiku-4-5', label: 'Haiku 4.5' },
 ];
 
-export const modelName = (id: string) => MODELS.find(([m]) => m === id)?.[1] ?? id;
+/** What a plain browser gets: the built-in engine and nothing else (the desktop app loads the real settings). */
+export const DEFAULT_SETTINGS: Settings = {
+  projectsRoot: '~/proiecte',
+  engines: [{ id: 'claude-code', name: 'Claude Code', command: 'claude', env: {}, models: CLAUDE_MODELS }],
+  defaultEngine: 'claude-code',
+  defaultModel: '',
+  approvals: 'auto',
+  onClose: 'ask',
+};
+
+export const engineIn = (s: Settings, id: string) => s.engines.find((e) => e.id === id) ?? s.engines[0];
+
+export const modelLabel = (s: Settings, engine: string, model: string) => engineIn(s, engine).models.find((m) => m.id === model)?.label ?? (model || 'default');
 
 /** One-off id for a new team. */
 export const teamId = () => `team-${Date.now().toString(36)}`;
