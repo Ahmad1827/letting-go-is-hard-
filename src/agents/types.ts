@@ -7,7 +7,9 @@ export type AgentActivity =
   /** Has an idea and is waiting for a turn in the owner's office. */
   | 'queued'
   /** In the owner's office, pitching an idea. */
-  | 'pitching';
+  | 'pitching'
+  /** On a team, at their desk waiting for the manager to hand them something. */
+  | 'standby';
 
 export interface AgentEvent {
   agentId: string;
@@ -47,11 +49,32 @@ export interface Idea {
   steps: string[];
   /** The git branch the work will happen on. */
   branch: string;
+  /** Set when a team manager pitches for the whole team. */
+  team?: string;
+  /** The owner's own words, when the work is what they asked for rather than the agent's idea. */
+  orders?: string;
+  /** Pictures the owner pasted along with those words. */
+  pictures?: Picture[];
 }
 
 /** The owner's answer to a pitch. */
 export type Decision =
   | { kind: 'approve' }
   | { kind: 'reject' }
-  /** Go work on something else: an existing project, a brand new one, and/or a specific instruction. */
-  | { kind: 'redirect'; project: string | null; newProject?: boolean; instruction?: string };
+  /** Not that: do this instead. The agent works out the project from the text and starts right away. */
+  | { kind: 'instead'; text: string; pictures?: Picture[] };
+
+/** A picture pasted into a message, as base64. */
+export interface Picture { mediaType: string; data: string }
+
+export type Role = 'manager' | 'worker';
+
+/** A group of agents: one manager who plans and merges, workers who each build a piece. */
+export interface Team {
+  id: string;
+  name: string;
+  manager: string;
+  workers: string[];
+  /** The owner's task for the team, if they gave one; otherwise the manager pitches. */
+  task?: string;
+}

@@ -267,3 +267,37 @@ button:focus-visible { outline: 1px dotted #000; outline-offset: -5px; }
 .usage-table th { background: var(--face); font-weight: normal; }
 .usage-table .total td { font-weight: bold; border-top: 1px solid var(--shadow); }
 .usage-table .meter { width: 90px; }
+
+/* teams */
+.list li.team-head { background: var(--face); font-weight: bold; justify-content: space-between; margin-top: 2px; }
+.list li.member { padding-left: 14px; }
+.role { font-size: 10px; padding: 0 4px; border: 1px solid var(--shadow); }
+.role.manager { background: #000080; color: #fff; }
+.role.worker { background: #fff; }
+button.small { min-width: 0; padding: 0 6px; font-size: 11px; }
+#team-pop { position: fixed; left: 50%; top: 18%; transform: translateX(-50%); width: 360px; max-width: calc(100vw - 16px); z-index: 11; }
+.team-form { display: flex; flex-direction: column; gap: 4px; }
+.team-form input, .team-form textarea, .team-form select, .instead textarea { font: inherit; border: 2px solid; border-color: var(--shadow) var(--light) var(--light) var(--shadow); padding: 2px; }
+.error { color: #c00; margin: 0; min-height: 1em; }
+.instead { display: flex; gap: 4px; align-items: stretch; margin-top: 4px; }
+.instead textarea { flex: 1; min-width: 0; }
+
+/* .win sets display, which would otherwise beat the hidden attribute */
+[hidden] { display: none !important; }
+#agent-list li.sel .role.worker { color: #000; }
+
+/* pasted pictures */
+.pictures { display: flex; flex-wrap: wrap; gap: 4px; }
+.pictures:empty { display: none; }
+.thumb { position: relative; display: inline-block; }
+.thumb img { width: 52px; height: 52px; object-fit: cover; border: 2px solid; border-color: var(--shadow) var(--light) var(--light) var(--shadow); display: block; }
+.thumb button { position: absolute; top: -4px; right: -4px; min-width: 0; width: 16px; height: 16px; padding: 0; font-size: 10px; line-height: 10px; }
+.instead { flex-direction: column; }
+.instead-row { display: flex; gap: 4px; }
+.instead-row textarea { flex: 1; min-width: 0; }
+
+/* music */
+.tray.music { display: flex; align-items: center; gap: 4px; padding: 0 4px; }
+.tray.music button { min-width: 0; padding: 1px 8px; }
+.tray.music button.off { color: var(--shadow); }
+.tray.music input { width: 70px; }

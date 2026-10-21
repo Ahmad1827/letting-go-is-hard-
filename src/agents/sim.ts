@@ -1,8 +1,8 @@
 import Phaser from 'phaser';
 import { OWNER } from '../owner';
-import type { Crew, CrewHooks } from './crew';
+import { teamId, type Crew, type CrewHooks } from './crew';
 import { ideaFor, ordered } from './ideas';
-import type { AgentActivity, Decision, Idea, ProjectInfo } from './types';
+import type { AgentActivity, Decision, Idea, Picture, ProjectInfo, Team } from './types';
 
 /**
  * Fake agents: they produce the same AgentEvents a real agent run will, so the
@@ -32,6 +32,9 @@ interface Run {
   seen: Set<string>;
   /** Place in line last announced to the office. */
   place: number;
+  /** Standing in the office with the pitch on the table. */
+  pitched: boolean;
+  team: Team | null;
 }
 
 const RISKY = (idea: Idea) => [`git push origin ${idea.branch}`, 'rm -rf build/', 'npm install --save-dev vitest', 'git rebase main'];
@@ -43,11 +46,13 @@ export class Sim implements Crew {
   private runs = new Map<string, Run>();
   private line: string[] = [];
   private models = new Map<string, string>();
+  private teams = new Map<string, Team>();
 
   constructor(private readonly clock: Phaser.Time.Clock, private readonly hooks: CrewHooks) {}
 
-  say(agentId: string, text: string) {
-    this.note(agentId, `${OWNER}: ${text}`);
+  say(agentId: string, text: string, pictures: Picture[] = []) {
+    if (this.runs.get(agentId)?.pitched) return this.decide(agentId, { kind: 'instead', text, pictures });
+    this.note(agentId, `${OWNER}: ${text}${pictures.length ? ` [${pictures.length} picture(s)]` : ''}`);
     this.clock.delayedCall(800, () => this.note(agentId, "(Simulated agents can't chat. Open the desktop app for real ones.)"));
   }
 
@@ -66,7 +71,7 @@ export class Sim implements Crew {
   interrupt() {}
 
   begin(agentId: string, name: string) {
-    this.runs.set(agentId, { name, steps: [], i: -1, settled: false, idea: null, seen: new Set(), place: 0 });
+    this.runs.set(agentId, { name, steps: [], i: -1, settled: false, idea: null, seen: new Set(), place: 0, pitched: false, team: null });
     this.research(agentId);
   }
 
@@ -76,8 +81,9 @@ export class Sim implements Crew {
     if (!run || run.settled) return;
     run.settled = true;
     const step = run.steps[run.i];
-    if (!step || step.activity === 'awaiting' || step.activity === 'queued') return; // wait for the owner
+    if (!step || step.activity === 'awaiting' || step.activity === 'queued' || step.activity === 'standby') return; // wait for someone
     if (step.activity === 'pitching') {
+      run.pitched = true;
       this.hooks.pitch(agentId, run.idea);
       if (this.autoApprove) this.clock.delayedCall(1500, () => this.decide(agentId, { kind: 'approve' }));
       return;
@@ -103,6 +109,7 @@ export class Sim implements Crew {
     const run = this.runs.get(agentId);
     if (!run || this.line[0] !== agentId || !run.idea) return;
     this.line.shift();
+    run.pitched = false;
     this.hooks.pitch(null, null);
     const idea = run.idea;
     run.seen.add(idea.title);
@@ -113,27 +120,81 @@ export class Sim implements Crew {
       this.note(agentId, `${OWNER} passed on "${idea.title}"`);
       this.research(agentId);
     } else {
-      const known = this.projects.find((p) => p.name === d.project);
-      const instruction = d.instruction?.trim();
-      if (d.newProject && d.project) {
-        this.note(agentId, `${OWNER} wants a new project: ${d.project}`);
-        this.work(agentId, ordered(run.name, d.project, null, instruction || `Set up ${d.project}`, true));
-      } else if (instruction) {
-        const project = known ?? this.projects.find((p) => p.name === idea.project);
-        this.note(agentId, `${OWNER}'s orders: ${instruction}`);
-        this.work(agentId, ordered(run.name, project?.name ?? idea.project, project?.path ?? idea.path, instruction, false));
-      } else {
-        this.note(agentId, `${OWNER} sent them to look at ${known?.name ?? 'something else'}`);
-        this.research(agentId, known);
-      }
+      this.note(agentId, `${OWNER}: not that. ${d.text}`);
+      this.work(agentId, this.orders(run.name, d.text, idea.project));
     }
     this.refreshLine();
+  }
+
+  createTeam(t: Omit<Team, 'id'>) {
+    const team: Team = { ...t, id: teamId() };
+    const members = [t.manager, ...t.workers];
+    for (const id of members) {
+      const run = this.runs.get(id);
+      if (!run) return;
+      if (run.team) this.leaveTeam(id);
+      run.timer?.remove();
+      if (this.line.includes(id)) {
+        if (this.line[0] === id && run.pitched) this.hooks.pitch(null, null);
+        this.line = this.line.filter((x) => x !== id);
+      }
+      run.pitched = false;
+      run.place = 0;
+      run.team = team;
+      this.note(id, `Joined ${team.name} as ${id === t.manager ? 'the manager' : 'a worker'}`);
+    }
+    this.teams.set(team.id, team);
+    for (const w of t.workers) this.standby(w);
+    const m = this.runs.get(t.manager)!;
+    if (t.task?.trim()) this.work(t.manager, this.orders(m.name, t.task.trim(), undefined));
+    else this.research(t.manager);
+    this.refreshLine();
+    this.pushTeams();
+  }
+
+  disbandTeam(id: string) {
+    const team = this.teams.get(id);
+    if (!team) return;
+    this.teams.delete(id);
+    for (const m of [team.manager, ...team.workers]) {
+      const run = this.runs.get(m);
+      if (!run) continue;
+      run.team = null;
+      this.note(m, `${team.name} was disbanded`);
+      this.research(m);
+    }
+    this.pushTeams();
+  }
+
+  private leaveTeam(id: string) {
+    const run = this.runs.get(id)!;
+    const team = run.team!;
+    if (team.manager === id) return this.disbandTeam(team.id);
+    team.workers = team.workers.filter((w) => w !== id);
+    run.team = null;
+  }
+
+  private pushTeams() {
+    this.hooks.teams([...this.teams.values()]);
+  }
+
+  /** The owner's own request, aimed at whichever project the text mentions. */
+  private orders(name: string, text: string, fallback?: string) {
+    const lower = text.toLowerCase();
+    const project = this.projects.find((p) => lower.includes(p.name.toLowerCase())) ?? this.projects.find((p) => p.name === fallback) ?? this.projects[0];
+    return ordered(name, project?.name ?? 'new-project', project?.path ?? null, text, !project);
+  }
+
+  private standby(agentId: string) {
+    const run = this.runs.get(agentId)!;
+    this.start(agentId, [{ activity: 'standby', min: 0, max: 0, detail: `Waiting for ${this.runs.get(run.team?.manager ?? '')?.name ?? 'the manager'}` }]);
   }
 
   // ---------------------------------------------------------------- phases
 
   private research(agentId: string, focus?: ProjectInfo) {
     const run = this.runs.get(agentId)!;
+    if (run.team && run.team.manager !== agentId) return this.standby(agentId);
     const project = focus ?? this.projects[Math.floor(Math.random() * this.projects.length)];
     if (!project) {
       this.start(agentId, [{ activity: 'idle', min: 8, max: 12, detail: 'No projects found to look at' }], () => this.research(agentId));
@@ -154,6 +215,22 @@ export class Sim implements Crew {
   private work(agentId: string, idea: Idea) {
     const run = this.runs.get(agentId)!;
     run.idea = idea;
+    if (run.team?.manager === agentId) {
+      idea.team = run.team.name;
+      // the workers each take a piece and go back to standing by when it's done
+      run.team.workers.forEach((w, i) => this.clock.delayedCall(1500 + i * 1200, () => {
+        const wr = this.runs.get(w);
+        if (wr?.team !== run.team) return;
+        this.note(w, `Task from ${run.name}: ${idea.steps[i % idea.steps.length] ?? idea.title}`);
+        wr.idea = idea;
+        this.start(w, [
+          { activity: 'reading', min: 3, max: 5, detail: `Read ${idea.project}` },
+          { activity: 'writing', min: 6, max: 10, detail: `Edit ${idea.project}: ${idea.steps[i % idea.steps.length] ?? idea.title}` },
+          { activity: 'running', min: 2, max: 4, detail: '$ run the checks' },
+          { activity: 'talking', min: 2, max: 3, detail: `Reporting back to ${run.name}` },
+        ], () => this.standby(w));
+      }));
+    }
     const where = idea.path ? idea.project : `new project ${idea.project}`;
     const steps: Step[] = [
       { activity: 'running', min: 2, max: 3, detail: idea.path ? `$ git switch -c ${idea.branch}` : `$ mkdir ${idea.project} && git init` },

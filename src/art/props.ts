@@ -14,12 +14,38 @@ const FONT: Record<string, string> = {
   A: '010101111101101', H: '101101111101101', M: '101111111101101', D: '110101101101110',
 };
 
-function text(r: R, x: number, y: number, s: string, color: string) {
+/** Pixel letters, `scale` pixels per dot. */
+export function text(r: R, x: number, y: number, s: string, color: string, scale = 1) {
   [...s].forEach((ch, i) => {
     const bits = FONT[ch];
-    if (bits) for (let k = 0; k < 15; k++) if (bits[k] === '1') r(x + i * 4 + (k % 3), y + Math.floor(k / 3), 1, 1, color);
+    if (bits) for (let k = 0; k < 15; k++) if (bits[k] === '1') r(x + (i * 4 + (k % 3)) * scale, y + Math.floor(k / 3) * scale, scale, scale, color);
   });
 }
+
+/** Width in pixels of `s` drawn by text() at `scale`. */
+export const textWidth = (s: string, scale = 1) => (s.length * 4 - 1) * scale;
+
+/** A classic 5x7 font for signs, where the 3x5 one is too cramped (its M looks like an H). */
+const BIG: Record<string, string> = {
+  A: '01110100011000111111100011000110001', B: '11110100011000111110100011000111110', C: '01110100011000010000100001000101110',
+  D: '11110100011000110001100011000111110', E: '11111100001000011110100001000011111', F: '11111100001000011110100001000010000',
+  G: '01110100011000010111100011000101111', H: '10001100011000111111100011000110001', I: '01110001000010000100001000010001110',
+  J: '00111000100001000010000101001001100', K: '10001100101010011000101001001010001', L: '10000100001000010000100001000011111',
+  M: '10001110111010110101100011000110001', N: '10001100011100110101100111000110001', O: '01110100011000110001100011000101110',
+  P: '11110100011000111110100001000010000', Q: '01110100011000110001101011001001101', R: '11110100011000111110101001001010001',
+  S: '01111100001000001110000010000111110', T: '11111001000010000100001000010000100', U: '10001100011000110001100011000101110',
+  V: '10001100011000110001100010101000100', W: '10001100011000110101101011010101010', X: '10001100010101000100010101000110001',
+  Y: '10001100010101000100001000010000100', Z: '11111000010001000100010001000011111',
+};
+
+export function bigText(r: R, x: number, y: number, s: string, color: string, scale = 1) {
+  [...s].forEach((ch, i) => {
+    const bits = BIG[ch];
+    if (bits) for (let k = 0; k < 35; k++) if (bits[k] === '1') r(x + (i * 6 + (k % 5)) * scale, y + Math.floor(k / 5) * scale, scale, scale, color);
+  });
+}
+
+export const bigTextWidth = (s: string, scale = 1) => (s.length * 6 - 1) * scale;
 
 export const SCREEN_W = 24;
 export const SCREEN_H = 18;
@@ -458,6 +484,18 @@ function buildFurniture(scene: Phaser.Scene) {
     r(2, 1, 9, 1, '#b0b0c0'); r(2, 2, 14, 1, '#c0c0cc');
   }, { outline: true });
 
+  // the big sign on the owner's office wall: gold letters on dark wood
+  const big = OWNER.toUpperCase().slice(0, 10);
+  const sw = bigTextWidth(big, 4) + 36, sh = 50;
+  single(scene, 'officesign', sw, sh, (r) => {
+    r(2, 4, sw - 4, sh - 4, 'rgba(0,0,0,0.35)'); // shadow on the wall
+    r(0, 0, sw - 2, sh - 4, '#5a2a18'); r(0, 0, sw - 2, 2, '#8a4a2a'); r(0, sh - 6, sw - 2, 2, '#3a160a');
+    r(4, 4, sw - 10, sh - 12, '#c9a227'); r(6, 6, sw - 14, sh - 16, '#3a1a0e');
+    bigText(r, 18 + 2, 11 + 2, big, '#1a0a04', 4);
+    bigText(r, 18, 11, big, '#f0c040', 4);
+    r(sw / 2 - 1 - 14, 0, 2, 2, '#f0d060'); r(sw / 2 - 1 + 14, 0, 2, 2, '#f0d060');
+  });
+
   // brass name plaque beside the owner's door
   const plate = OWNER.toUpperCase().slice(0, 8);
   const pw = plate.length * 4 + 7;
@@ -573,7 +611,7 @@ function buildScreens(scene: Phaser.Scene) {
   loop(scene, 'scr-alert', 'screen', ['alert0', 'alert1'], 2);
 }
 
-export const BUBBLE_FRAMES = ['idle', 'thinking', 'reading', 'writing', 'running', 'awaiting', 'talking', 'done', 'queued', 'pitching'] as const;
+export const BUBBLE_FRAMES = ['idle', 'thinking', 'reading', 'writing', 'running', 'awaiting', 'talking', 'done', 'queued', 'pitching', 'standby'] as const;
 
 function buildBubbles(scene: Phaser.Scene) {
   sheet(scene, 'bubble', 26, 24, BUBBLE_FRAMES, (r, frame) => {
@@ -617,6 +655,7 @@ function buildBubbles(scene: Phaser.Scene) {
         r(4, 5, 17, 2, '#555'); r(4, 9, 13, 2, '#555'); r(4, 13, 15, 2, '#555');
         break;
       case 'queued':
+      case 'standby':
         // hourglass
         r(8, 2, 10, 2, '#7a5a2a'); r(8, 14, 10, 2, '#7a5a2a');
         for (let k = 0; k < 5; k++) { r(9 + k, 4 + k, 8 - k * 2, 1, '#cfe8f4'); r(9 + k, 13 - k, 8 - k * 2, 1, '#cfe8f4'); }

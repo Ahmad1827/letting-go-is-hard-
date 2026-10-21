@@ -1,4 +1,4 @@
-import type { AgentEvent, Decision, Idea, ProjectInfo } from './types';
+import type { AgentEvent, Decision, Idea, Picture, ProjectInfo, Team } from './types';
 
 /** One of the plan's usage windows, as Claude Code reports it. */
 export interface UsageWindow { utilization: number; resetsAt: number }
@@ -17,6 +17,8 @@ export interface CrewHooks {
   queue(agentIds: string[]): void;
   /** Fresh numbers for the plan's usage windows. */
   limits(l: Limits): void;
+  /** The teams changed. */
+  teams(list: Team[]): void;
 }
 
 /** The staff, simulated or real. The office drives both the same way. */
@@ -32,14 +34,33 @@ export interface Crew {
   /** Answer the pitch currently in the office. */
   decide(agentId: string, d: Decision): void;
   /** A message from the owner, typed in the Properties panel. */
-  say(agentId: string, text: string): void;
+  say(agentId: string, text: string, pictures?: Picture[]): void;
   setModel(agentId: string, model: string): void;
   modelOf(agentId: string): string;
   /** Null for simulated agents, which use nothing. */
   usageOf(agentId: string): AgentUsage | null;
   /** Stop whatever the agent is doing right now. */
   interrupt(agentId: string): void;
+  /** Group agents under a manager. With a task they start on it; without one the manager pitches. */
+  createTeam(team: Omit<Team, 'id'>, pictures?: Picture[]): void;
+  /** Everyone goes back to working on their own. */
+  disbandTeam(teamId: string): void;
 }
 
 /** Model choices offered in the Properties panel; '' leaves it to Claude Code's default. */
-export const MODELS: [string, string][] = [['', 'Default'], ['fable', 'Fable'], ['opus', 'Opus'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku']];
+export const MODELS: [string, string][] = [
+  ['', 'Claude Code default'],
+  ['claude-fable-5-1', 'Fable 5.1'],
+  ['claude-opus-5-5', 'Opus 5.5'],
+  ['claude-opus-5', 'Opus 5'],
+  ['claude-opus-4-8', 'Opus 4.8'],
+  ['claude-sonnet-5-5', 'Sonnet 5.5'],
+  ['claude-sonnet-5', 'Sonnet 5'],
+  ['claude-haiku-5-5', 'Haiku 5.5'],
+  ['claude-haiku-4-5', 'Haiku 4.5'],
+];
+
+export const modelName = (id: string) => MODELS.find(([m]) => m === id)?.[1] ?? id;
+
+/** One-off id for a new team. */
+export const teamId = () => `team-${Date.now().toString(36)}`;

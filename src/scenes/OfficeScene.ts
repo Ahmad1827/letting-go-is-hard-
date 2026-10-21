@@ -3,19 +3,32 @@ import { bus } from '../bus';
 import { buildPeople, CAST } from '../art/people';
 import { buildProps } from '../art/props';
 import { buildRooms } from '../art/rooms';
-import { buildBand, currentPhase } from '../art/skyline';
+import { buildBand } from '../art/skyline';
 import { Agent } from '../agents/Agent';
 import type { Crew, CrewHooks } from '../agents/crew';
 import { RealCrew, type AgentBridge } from '../agents/real';
 import { Sim } from '../agents/sim';
-import type { AgentEvent, Decision, Idea, ProjectInfo } from '../agents/types';
+import type { AgentEvent, Decision, Idea, Picture, ProjectInfo, Team } from '../agents/types';
 import type { AgentView, ApprovalView, PitchView } from '../ui/hud';
 import {
-  BAND_ROWS, BOSS_MONITOR, COLS, ELEVATORS, HEIGHT, OUTBOX, ROWS, TILE, WIDTH, desks, props, randomNear, rooms, spots, walkable, walls,
-  type Spot, type Tile,
+  BAND_ROWS, BOSS_MONITOR, COLS, ELEVATORS, HEIGHT, OUTBOX, ROWS, TILE, WIDTH, desks, props, rooms, spots, walls,
+  type Tile,
 } from '../world/map';
 
 const MAX_PAPERS = 12;
+
+/** At their PC: how they sit (typing or not) and what their screen shows, per activity. */
+const AT_PC: Record<Exclude<AgentEvent['activity'], 'queued' | 'pitching'>, ['stand' | 'type', string]> = {
+  thinking: ['stand', 'desktop'],
+  reading: ['type', 'scr-code'],
+  writing: ['type', 'scr-code'],
+  running: ['type', 'scr-run'],
+  awaiting: ['stand', 'scr-alert'],
+  talking: ['stand', 'desktop'],
+  standby: ['stand', 'desktop'],
+  done: ['stand', 'desktop'],
+  idle: ['stand', 'scr-saver'],
+};
 
 const SAMPLE_PROJECTS: ProjectInfo[] = [
   { name: 'letting-go-is-hard', path: '~/proiecte/letting-go-is-hard', languages: ['TypeScript'], files: 24, biggest: 'src/art/props.ts', hasTests: false, hasReadme: true, readme: 'Letting Go Is Hard', isGit: true, lastCommit: 'Whole floor with detailed pixel art', hasCi: false },
@@ -40,8 +53,6 @@ export class OfficeScene extends Phaser.Scene {
   private racks: Phaser.GameObjects.Sprite[] = [];
   private doors: [Phaser.GameObjects.Image, Phaser.GameObjects.Image][] = [];
   private ring!: Phaser.GameObjects.Image;
-  /** Which spot each agent is holding, so two agents don't stand in the same place. */
-  private claims = new Map<string, string>();
   private pending = new Map<string, string>();
   private papers: Phaser.GameObjects.Image[] = [];
   private shipped = 0;
@@ -49,6 +60,7 @@ export class OfficeScene extends Phaser.Scene {
   private dirty = true;
   private lastPush = 0;
   private avatars = new Map<string, string>();
+  private teamList: Team[] = [];
   private keys!: Record<'up' | 'down' | 'left' | 'right' | 'w' | 'a' | 's' | 'd', Phaser.Input.Keyboard.Key>;
   private drag: { x: number; y: number; sx: number; sy: number } | null = null;
 
@@ -60,7 +72,7 @@ export class OfficeScene extends Phaser.Scene {
     buildPeople(this);
     buildProps(this);
     buildRooms(this);
-    buildBand(this, WIDTH, currentPhase());
+    buildBand(this, WIDTH, 'night'); // always after hours: the city at night, 1990s style
     this.drawRoom();
 
     for (const p of props) {
@@ -81,6 +93,11 @@ export class OfficeScene extends Phaser.Scene {
       pitch: (id, idea) => this.showPitch(id, idea),
       queue: (ids) => bus.emit('queue', ids.map((id) => this.agents.get(id)?.name ?? id)),
       limits: (l) => bus.emit('usage:limits', l),
+      teams: (list) => {
+        this.teamList = list;
+        this.dirty = true;
+        bus.emit('teams', list);
+      },
     };
     // inside the desktop app the staff are real Claude Code sessions; in a plain browser they're simulated
     const bridge = (window as { office?: { agents?: AgentBridge } }).office?.agents;
@@ -101,12 +118,14 @@ export class OfficeScene extends Phaser.Scene {
     bus.on('hire', () => this.hire());
     bus.on('approval:resolve', ({ id, ok }: { id: string; ok: boolean }) => this.resolve(id, ok));
     bus.on('pitch:decide', ({ id, decision }: { id: string; decision: Decision }) => this.crew.decide(id, decision));
-    bus.on('agent:say', ({ id, text }: { id: string; text: string }) => this.crew.say(id, text));
+    bus.on('agent:say', ({ id, text, pictures }: { id: string; text: string; pictures?: Picture[] }) => this.crew.say(id, text, pictures));
     bus.on('agent:model', ({ id, model }: { id: string; model: string }) => {
       this.crew.setModel(id, model);
       this.dirty = true;
     });
     bus.on('agent:stop', (id: string) => this.crew.interrupt(id));
+    bus.on('team:create', ({ pictures, ...t }: Omit<Team, 'id'> & { pictures?: Picture[] }) => this.crew.createTeam(t, pictures));
+    bus.on('team:disband', (id: string) => this.crew.disbandTeam(id));
     bus.on('autoapprove', (on: boolean) => {
       this.crew.autoApprove = on;
       if (on) for (const id of [...this.pending.keys()]) this.resolve(id, true);
@@ -342,88 +361,37 @@ export class OfficeScene extends Phaser.Scene {
     const settle = () => this.crew.settled(a.id);
     const screen = this.screens[a.desk.id];
 
-    if (a.activity === 'writing') screen.play('scr-saver');
-    this.claims.delete(a.id);
+    // a hand raised for permission comes down once they've moved on
+    if (a.activity === 'awaiting' && ev.activity !== 'awaiting' && this.pending.delete(a.id)) this.pushApprovals();
     a.setWander(null);
     a.activity = ev.activity;
     a.detail = ev.detail ?? '';
     a.task = ev.task ?? a.task;
     if (ev.detail) this.note(a.id, ev.detail);
+    if (ev.activity === 'awaiting') {
+      this.pending.set(a.id, ev.detail ?? 'Permission needed');
+      this.pushApprovals();
+    }
 
-    switch (ev.activity) {
-      case 'thinking': {
-        const seat = this.tryClaim(a.id, spots.conference);
-        if (seat) a.goTo(seat, settle);
-        else {
-          a.goTo(this.near(a.desk.seat, 3, 'down'), settle);
-          a.setWander(a.desk.seat, 3);
-        }
-        break;
-      }
-      case 'reading':
-        a.goTo(this.claim(a.id, spots.archive), settle);
-        break;
-      case 'writing':
-        a.goTo(a.desk.seat, () => {
-          a.setPose('type');
-          screen.play('scr-code');
-          settle();
-        });
-        break;
-      case 'running':
-        a.goTo(this.claim(a.id, spots.server), settle);
-        break;
-      case 'awaiting':
-        // stands up by their desk with a hand raised until the command is approved
-        this.pending.set(a.id, ev.detail ?? 'Permission needed');
-        this.pushApprovals();
-        a.goTo(this.near(a.desk.seat, 1, 'down'), () => {
-          a.setPose('raise');
-          settle();
-        });
-        break;
-      case 'queued': {
-        // the first few wait in line outside the owner's door, the rest at their desks
-        const place = ev.queue ?? 1;
-        a.goTo(place <= spots.line.length ? spots.line[place - 1] : a.desk.seat, settle);
-        break;
-      }
-      case 'pitching':
-        a.goTo(spots.pitch, settle);
-        break;
-      case 'talking':
-        this.talk(a, settle);
-        break;
-      case 'done':
-        a.goTo(this.claim(a.id, spots.outbox), () => {
-          this.ship();
-          settle();
-        });
-        break;
-      case 'idle':
-        a.goTo(this.claim(a.id, spots.lounge), settle);
-        a.setWander(spots.loungeCenter, 2, 4000);
-        break;
+    // People only ever go to two places: the owner's office to pitch, and their own PC.
+    if (ev.activity === 'queued') {
+      // the first few wait in line outside the owner's door, the rest at their desks
+      const place = ev.queue ?? 1;
+      a.goTo(place <= spots.line.length ? spots.line[place - 1] : a.desk.seat, settle);
+    } else if (ev.activity === 'pitching') {
+      a.goTo(spots.pitch, settle);
+    } else {
+      const [pose, show] = AT_PC[ev.activity];
+      a.goTo(a.desk.seat, () => {
+        a.setPose(pose);
+        if (show.startsWith('scr-')) screen.play(show, true);
+        else screen.stop().setFrame(show);
+        if (ev.activity === 'done') this.ship();
+        settle();
+      });
     }
     this.racks.forEach((r) => (r.anims.timeScale = this.count('running') ? 3 : 1));
     this.dirty = true;
-  }
-
-  private talk(a: Agent, settle: () => void) {
-    const others = [...this.agents.values()].filter((o) => o !== a && !o.moving);
-    const partner = others[Math.floor(Math.random() * others.length)];
-    const spot = partner && this.besides(partner.tile);
-    if (!partner || !spot) {
-      a.goTo(this.near(a.desk.seat, 3, 'down'), settle);
-      return;
-    }
-    a.detail = `Talking with ${partner.name}`;
-    a.goTo(spot, () => {
-      a.face(partner.tile);
-      partner.face(a.tile);
-      partner.flashBubble('talking', 3500);
-      settle();
-    });
   }
 
   private resolve(id: string, ok: boolean) {
@@ -444,30 +412,6 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   // ---------------------------------------------------------------- places
-
-  private tryClaim(id: string, group: Spot[]): Spot | null {
-    const taken = new Set(this.claims.values());
-    const free = group.find((s) => !taken.has(`${s.x},${s.y}`));
-    if (free) this.claims.set(id, `${free.x},${free.y}`);
-    return free ?? null;
-  }
-
-  private claim(id: string, group: Spot[]): Spot {
-    return this.tryClaim(id, group) ?? this.near(group[0], 2, group[0].face);
-  }
-
-  private near(center: Tile, radius: number, face: Spot['face']): Spot {
-    const t = randomNear(center, radius) ?? center;
-    return { ...t, face };
-  }
-
-  private besides(t: Tile): Spot | null {
-    for (const [dx, face] of [[-1, 'right'], [1, 'left']] as const)
-      if (walkable(t.x + dx, t.y)) return { x: t.x + dx, y: t.y, face };
-    for (const [dy, face] of [[1, 'up'], [-1, 'down']] as const)
-      if (walkable(t.x, t.y + dy)) return { x: t.x, y: t.y + dy, face };
-    return null;
-  }
 
   private count(activity: Agent['activity']) {
     return [...this.agents.values()].filter((a) => a.activity === activity).length;
@@ -518,9 +462,15 @@ export class OfficeScene extends Phaser.Scene {
       log: a.log,
       model: this.crew.modelOf(a.id),
       usage: this.crew.usageOf(a.id),
+      ...this.roleOf(a.id),
       real: this.crew.real,
     }));
     bus.emit('agents', views);
+  }
+
+  private roleOf(id: string): { team?: string; role?: 'manager' | 'worker' } {
+    const t = this.teamList.find((x) => x.manager === id || x.workers.includes(id));
+    return t ? { team: t.name, role: t.manager === id ? 'manager' : 'worker' } : {};
   }
 
   /** Head-and-shoulders portrait for the Properties panel. */

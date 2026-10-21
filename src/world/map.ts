@@ -138,6 +138,8 @@ place('sofa', 36, 6, 38, 6);
 place('coffeetable', 36, 7, 37, 7);
 place('plant', 38, 8);
 decor('plaque', 35 * TILE + 24, 9 * TILE + 32, 10 * TILE + 1);
+// the owner's name, big, on the window wall of their office
+decor('officesign', 33.5 * TILE, 112, -4);
 export const BOSS_MONITOR = {
   x: 33 * TILE + TILE / 2 - BOSS_W / 2 + BOSS_SCREEN.x,
   y: 6 * TILE - BOSS_H + BOSS_SCREEN.y,

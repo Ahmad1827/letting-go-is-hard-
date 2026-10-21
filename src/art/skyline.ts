@@ -13,7 +13,7 @@ export function currentPhase(hour = new Date().getHours()): Phase {
 const THEMES: Record<Phase, { sky: string[]; far: string; water: string; bld: string; lit: string; litP: number; tower: string; stars: number; cloud: string | null }> = {
   day: { sky: ['#3f7cc2', '#7fb6e6', '#cfe8f6'], far: '#8a9bb0', water: '#4f7aa8', bld: '#6f7c8e', lit: '#d8e2ea', litP: 0.05, tower: '#b9c2cc', stars: 0, cloud: '#f4f8fc' },
   dusk: { sky: ['#2a1f4f', '#7a4278', '#e9805e', '#f7c46c'], far: '#4a3550', water: '#8a5a7a', bld: '#3b3150', lit: '#ffd97a', litP: 0.28, tower: '#c08a86', stars: 12, cloud: '#e8a0a0' },
-  night: { sky: ['#03050d', '#0a1128', '#1a2550'], far: '#141a2e', water: '#121a33', bld: '#121625', lit: '#ffe08a', litP: 0.38, tower: '#262b38', stars: 140, cloud: null },
+  night: { sky: ['#02030c', '#0a0e2c', '#1c1a48', '#3a2450'], far: '#10142a', water: '#0c1230', bld: '#0e1120', lit: '#ffd870', litP: 0.46, tower: '#20242f', stars: 170, cloud: null },
 };
 
 function gradient(stops: string[], t: number): string {
@@ -59,6 +59,14 @@ export function buildBand(scene: Phaser.Scene, width: number, phase: Phase) {
     }
     for (let y = HORIZON; y < WATER_END; y++) r(0, y, width, 1, shade(th.water, -(y - HORIZON) * 0.015));
     for (let i = 0; i < 80; i++) r(Math.floor(rnd() * width), HORIZON + 1 + Math.floor(rnd() * 10), 2 + Math.floor(rnd() * 4), 1, shade(th.water, 0.22));
+    if (phase === 'night') {
+      // Jersey City lights across the river, and their reflections in the water
+      for (let i = 0; i < 140; i++) {
+        const x = Math.floor(rnd() * width), c = rnd() < 0.7 ? '#ffd870' : '#fff2c0';
+        r(x, HORIZON - 1 - Math.floor(rnd() * 5), 1, 1, c);
+        if (rnd() < 0.5) for (let k = 0; k < 3; k++) r(x, HORIZON + 2 + k * 3 + Math.floor(rnd() * 2), 1, 2, 'rgba(255,216,112,0.35)');
+      }
+    }
     // a ferry heading for Staten Island
     r(410, HORIZON + 4, 14, 2, '#e8e0c8'); r(413, HORIZON + 2, 7, 2, '#f4c040'); r(410, HORIZON + 6, 14, 1, shade(th.water, -0.3));
 
@@ -80,11 +88,14 @@ export function buildBand(scene: Phaser.Scene, width: number, phase: Phase) {
       const c = shade(th.bld, (rnd() - 0.5) * 0.25);
       r(x, top, w, SILL - top, c);
       r(x + w - 3, top, 3, SILL - top, shade(c, -0.18)); r(x, top, w, 1, shade(c, 0.2));
+      if (phase === 'night' && rnd() < 0.4) r(x + Math.floor(w / 2), top - 2, 2, 2, '#ff3a30'); // aircraft warning light
       if (rnd() < 0.35) { const tx = x + 3 + Math.floor(rnd() * (w - 10)); r(tx, top - 7, 6, 5, '#6a4a30'); r(tx, top - 8, 6, 1, '#4a3020'); r(tx + 1, top - 2, 1, 2, '#3a2a1a'); r(tx + 4, top - 2, 1, 2, '#3a2a1a'); }
       for (let yy = top + 3; yy < SILL - 1; yy += 4)
         for (let xx = x + 2; xx < x + w - 3; xx += 3) {
           const lit = rnd() < th.litP;
-          r(xx, yy, 2, 2, lit ? th.lit : shade(c, -0.25));
+          // at night most windows glow warm, a few flicker blue with a TV or a CRT
+          const glow = phase === 'night' ? (rnd() < 0.12 ? '#8ab4ff' : rnd() < 0.3 ? '#fff2c0' : th.lit) : th.lit;
+          r(xx, yy, 2, 2, lit ? glow : shade(c, -0.25));
         }
       x += w + (rnd() < 0.3 ? 2 : 0);
     }

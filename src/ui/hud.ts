@@ -1,7 +1,9 @@
 import { bus } from '../bus';
 import { MODELS, type AgentUsage, type Limits } from '../agents/crew';
-import type { AgentActivity, Decision, Idea, ProjectInfo } from '../agents/types';
+import type { AgentActivity, Decision, Idea, Role, Team } from '../agents/types';
+import { Lofi } from '../audio/lofi';
 import { OWNER } from '../owner';
+import { acceptPictures } from './paste';
 
 export interface AgentView {
   id: string;
@@ -15,6 +17,8 @@ export interface AgentView {
   /** A real Claude Code session rather than a simulated one. */
   real: boolean;
   usage: AgentUsage | null;
+  team?: string;
+  role?: Role;
 }
 
 export interface ApprovalView { id: string; name: string; detail: string }
@@ -32,6 +36,7 @@ const LABEL: Record<AgentActivity, string> = {
   done: 'Shipping',
   queued: 'Waiting to pitch',
   pitching: 'Pitching an idea',
+  standby: 'Waiting for a task',
 };
 
 const DOT: Record<AgentActivity, string> = {
@@ -45,6 +50,7 @@ const DOT: Record<AgentActivity, string> = {
   done: '#c9a227',
   queued: '#b0703a',
   pitching: '#f0b020',
+  standby: '#7a7aa0',
 };
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -83,45 +89,27 @@ function initOffice() {
   const box = byId('pitch');
   const waiting = byId('waiting');
   let pitch: PitchView | null = null;
-  let projects: ProjectInfo[] = [];
   byId('office-title').textContent = `${OWNER}'s Office`;
 
   const decide = (decision: Decision) => pitch && bus.emit('pitch:decide', { id: pitch.id, decision });
 
-  const redirectForm = (p: PitchView) => {
-    const form = el('form', 'redirect');
-    const select = el('select');
-    for (const proj of projects) {
-      const o = el('option', undefined, proj.name);
-      o.value = proj.name;
-      o.selected = proj.name === p.idea.project;
-      select.append(o);
-    }
-    const fresh = el('option', undefined, '(new project...)');
-    fresh.value = '';
-    select.append(fresh);
-    const name = el('input');
-    name.placeholder = 'new-project-name';
-    name.hidden = true;
-    select.onchange = () => (name.hidden = select.value !== '');
+  /** "Not this, do this instead": the agent works out the project from the text and gets going. */
+  const insteadForm = () => {
+    const form = el('form', 'instead');
     const text = el('textarea');
-    text.rows = 3;
-    text.placeholder = 'What should they do? Leave empty to let them find their own idea there.';
+    text.rows = 2;
+    text.placeholder = 'Not this? Tell them what to do instead... (you can paste pictures)';
+    const pics = acceptPictures(text);
     const send = el('button', undefined, 'Send');
     send.type = 'submit';
-    const cancel = el('button', undefined, 'Cancel');
-    cancel.type = 'button';
-    cancel.onclick = () => render();
     form.onsubmit = (e) => {
       e.preventDefault();
-      const isNew = select.value === '';
-      const project = isNew ? name.value.trim().replace(/\s+/g, '-') : select.value;
-      if (isNew && !project) return name.focus();
-      decide({ kind: 'redirect', project, newProject: isNew, instruction: text.value.trim() || undefined });
+      const t = text.value.trim();
+      if (t || pics.count) decide({ kind: 'instead', text: t || 'Do what the picture shows.', pictures: pics.take() });
     };
-    const row = el('div', 'buttons');
-    row.append(send, cancel);
-    form.append(el('label', undefined, 'Project'), select, name, el('label', undefined, 'Instructions'), text, row);
+    const row = el('div', 'instead-row');
+    row.append(text, send);
+    form.append(pics.strip, row);
     return form;
   };
 
@@ -136,20 +124,21 @@ function initOffice() {
     img.src = p.avatar;
     img.alt = p.name;
     const info = el('div');
-    info.append(el('b', undefined, `${p.name} has an idea`), el('div', 'task', p.idea.path ? p.idea.project : `${p.idea.project} (new)`));
+    info.append(
+      el('b', undefined, p.idea.team ? `${p.name} has an idea for ${p.idea.team}` : `${p.name} has an idea`),
+      el('div', 'task', p.idea.path ? p.idea.project : `${p.idea.project} (new)`),
+    );
     who.append(img, info);
     const steps = el('ol', 'steps');
     steps.append(...p.idea.steps.map((t) => el('li', undefined, t)));
     const buttons = el('div', 'buttons');
     const yes = el('button', undefined, 'Approve');
-    const no = el('button', undefined, 'Pass');
-    const other = el('button', undefined, 'Redirect...');
+    const no = el('button', undefined, "Don't approve");
     yes.onclick = () => decide({ kind: 'approve' });
     no.onclick = () => decide({ kind: 'reject' });
-    buttons.append(yes, no, other);
+    buttons.append(yes, no);
     const card = el('div', 'card');
-    card.append(who, el('h4', undefined, p.idea.title), el('p', undefined, p.idea.summary), steps, el('code', undefined, p.idea.branch), buttons);
-    other.onclick = () => buttons.replaceWith(redirectForm(p));
+    card.append(who, el('h4', undefined, p.idea.title), el('p', undefined, p.idea.summary), steps, el('code', undefined, p.idea.branch), buttons, insteadForm());
     box.replaceChildren(card);
   };
 
@@ -157,7 +146,6 @@ function initOffice() {
     pitch = view;
     render();
   });
-  bus.on('projects', (list: ProjectInfo[]) => (projects = list));
   bus.on('queue', (names: string[]) => {
     const outside = names.slice(1); // the first in line is in the office or on the way in
     waiting.textContent = outside.length ? `Waiting: ${outside.join(', ')}` : 'Nobody waiting.';
@@ -284,9 +272,145 @@ function initUsage() {
   renderTray();
 }
 
+/** The "New team" window: pick a manager and workers from the staff, optionally give them a task. */
+function initTeams() {
+  const pop = byId('team-pop');
+  const body = byId('team-body');
+  let agents: AgentView[] = [];
+  let teams: Team[] = [];
+  let count = 0;
+
+  const open = () => {
+    const taken = new Set(teams.flatMap((t) => [t.manager, ...t.workers]));
+    const free = agents.filter((a) => !taken.has(a.id));
+    const form = el('form', 'team-form');
+    const name = el('input');
+    name.value = `Team ${['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot'][count % 6]}`;
+    const table = el('table', 'usage-table');
+    const roles = new Map<string, HTMLSelectElement>();
+    for (const a of free) {
+      const tr = el('tr');
+      const sel = el('select');
+      for (const [v, l] of [['', '(not in team)'], ['manager', 'Manager'], ['worker', 'Worker']]) {
+        const o = el('option', undefined, l);
+        o.value = v;
+        sel.append(o);
+      }
+      sel.onchange = () => {
+        // only one manager
+        if (sel.value === 'manager') for (const [id, other] of roles) if (id !== a.id && other.value === 'manager') other.value = 'worker';
+      };
+      roles.set(a.id, sel);
+      const td = el('td');
+      td.append(sel);
+      tr.append(el('td', undefined, a.name), td);
+      table.append(tr);
+    }
+    const task = el('textarea');
+    task.rows = 3;
+    task.placeholder = 'Optional. Leave empty and the manager will look around and pitch an idea for the team. You can paste pictures here.';
+    const pics = acceptPictures(task);
+    const error = el('p', 'error');
+    const create = el('button', undefined, 'Create team');
+    create.type = 'submit';
+    const cancel = el('button', undefined, 'Cancel');
+    cancel.type = 'button';
+    cancel.onclick = () => (pop.hidden = true);
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      const picked = [...roles].filter(([, s]) => s.value);
+      const manager = picked.find(([, s]) => s.value === 'manager')?.[0];
+      const workers = picked.filter(([, s]) => s.value === 'worker').map(([id]) => id);
+      if (!manager || !workers.length) {
+        error.textContent = 'Pick one manager and at least one worker.';
+        return;
+      }
+      const pictures = pics.take();
+      bus.emit('team:create', { name: name.value.trim() || 'Team', manager, workers, task: task.value.trim() || (pictures.length ? 'Build what the pictures show.' : undefined), pictures });
+      count++;
+      pop.hidden = true;
+    };
+    const buttons = el('div', 'buttons');
+    buttons.append(create, cancel);
+    if (free.length < 2) {
+      body.replaceChildren(el('p', 'hint', 'Hire at least two people who aren’t on a team yet.'), cancel);
+    } else {
+      form.append(el('label', undefined, 'Name'), name, el('label', undefined, 'Who does what'), table, el('label', undefined, 'Task'), task, pics.strip, error, buttons);
+      body.replaceChildren(form);
+    }
+    pop.hidden = false;
+  };
+
+  byId('new-team').onclick = open;
+  byId('team-close').onclick = () => (pop.hidden = true);
+  bus.on('agents', (views: AgentView[]) => (agents = views));
+  bus.on('teams', (list: Team[]) => (teams = list));
+}
+
+/** Lo-fi music in the taskbar: on/off and volume, remembered between runs. */
+function initMusic() {
+  const button = byId('music') as HTMLButtonElement;
+  const slider = byId('volume') as HTMLInputElement;
+  const KEY = 'lgih.music';
+  let prefs = { on: true, volume: 0.5 };
+  try {
+    prefs = { ...prefs, ...JSON.parse(localStorage.getItem(KEY) ?? '{}') };
+  } catch {
+    // defaults it is
+  }
+  const save = () => {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(prefs));
+    } catch {
+      // not remembered, that's fine
+    }
+  };
+  const music = new Lofi();
+  music.setVolume(prefs.volume);
+  slider.value = String(Math.round(prefs.volume * 100));
+  let stalled = false;
+  const show = () => {
+    button.textContent = stalled ? '♪ No sound' : prefs.on ? '♪ Music' : '♪ Off';
+    button.classList.toggle('off', stalled || !prefs.on);
+    button.title = stalled
+      ? "The sound device stopped taking audio, so the music stopped. On WSL that's WSL's audio bridge to Windows: restarting WSL (wsl --shutdown in a Windows terminal) fixes it. Click to try again."
+      : prefs.on ? 'Lo-fi music is playing. Click to stop.' : 'Click for lo-fi music.';
+  };
+  music.onStall = () => {
+    stalled = true;
+    show();
+  };
+  button.onclick = () => {
+    if (stalled) {
+      stalled = false;
+      prefs.on = true;
+      music.start();
+    } else {
+      prefs.on = !prefs.on;
+      if (prefs.on) music.start();
+      else music.stop();
+    }
+    save();
+    show();
+  };
+  slider.oninput = () => {
+    prefs.volume = Number(slider.value) / 100;
+    music.setVolume(prefs.volume);
+    save();
+  };
+  if (prefs.on) music.start();
+  // browsers only let audio play after the first click or key press
+  const wake = () => music.resume();
+  window.addEventListener('pointerdown', wake);
+  window.addEventListener('keydown', wake);
+  show();
+}
+
 export function initHud() {
+  initMusic();
   initOffice();
   initUsage();
+  initTeams();
   const list = byId('agent-list');
   const requests = byId('requests');
   const inspect = byId('inspect');
@@ -309,25 +433,56 @@ export function initHud() {
     return row;
   };
 
+  let teams: Team[] = [];
+
+  const row = (a: AgentView, role?: Role) => {
+    const li = el('li', a.id === selected ? 'sel' : undefined);
+    if (role) li.classList.add('member');
+    const dot = el('span', 'dot');
+    dot.style.background = DOT[a.activity];
+    li.append(dot, el('b', undefined, a.name));
+    if (role) li.append(el('span', `role ${role}`, role === 'manager' ? 'Manager' : 'Worker'));
+    li.append(el('span', 'status', LABEL[a.activity]));
+    li.onclick = () => {
+      bus.emit('select', a.id);
+      bus.emit('focus', a.id);
+    };
+    return li;
+  };
+
   const renderList = () => {
     if (!agents.length) {
       list.replaceChildren(el('li', 'empty', 'Nobody in yet...'));
       return;
     }
-    list.replaceChildren(
-      ...agents.map((a) => {
-        const li = el('li', a.id === selected ? 'sel' : undefined);
-        const dot = el('span', 'dot');
-        dot.style.background = DOT[a.activity];
-        li.append(dot, el('b', undefined, a.name), el('span', 'status', LABEL[a.activity]));
-        li.onclick = () => {
-          bus.emit('select', a.id);
-          bus.emit('focus', a.id);
-        };
-        return li;
-      }),
-    );
+    const views = new Map(agents.map((a) => [a.id, a]));
+    const rows: HTMLElement[] = [];
+    const inTeam = new Set<string>();
+    for (const t of teams) {
+      const head = el('li', 'team-head');
+      const disband = el('button', 'small', 'Disband');
+      disband.onclick = (e) => {
+        e.stopPropagation();
+        bus.emit('team:disband', t.id);
+      };
+      head.append(el('b', undefined, t.name), disband);
+      rows.push(head);
+      for (const [id, role] of [[t.manager, 'manager'], ...t.workers.map((w) => [w, 'worker'])] as [string, Role][]) {
+        const a = views.get(id);
+        if (a) rows.push(row(a, role));
+        inTeam.add(id);
+      }
+    }
+    const solo = agents.filter((a) => !inTeam.has(a.id));
+    if (teams.length && solo.length) rows.push(el('li', 'team-head', 'On their own'));
+    rows.push(...solo.map((a) => row(a)));
+    list.replaceChildren(...rows);
   };
+
+  bus.on('teams', (list: Team[]) => {
+    teams = list;
+    renderList();
+  });
 
   const renderRequests = () => {
     if (!approvals.length) {
@@ -378,18 +533,19 @@ export function initHud() {
     const log = el('pre', 'log');
     const chat = el('form', 'chat');
     const input = el('input');
-    input.placeholder = `Message ${a.name}...`;
+    input.placeholder = `Message ${a.name}... (Ctrl+V to paste a picture)`;
+    const pics = acceptPictures(input);
     const send = el('button', undefined, 'Send');
     send.type = 'submit';
     chat.append(input, send);
     chat.onsubmit = (e) => {
       e.preventDefault();
       const text = input.value.trim();
-      if (!text) return;
-      bus.emit('agent:say', { id: a.id, text });
+      if (!text && !pics.count) return;
+      bus.emit('agent:say', { id: a.id, text: text || 'Have a look at this picture.', pictures: pics.take() });
       input.value = '';
     };
-    inspect.replaceChildren(who, controls, decisionSlot, log, chat);
+    inspect.replaceChildren(who, controls, decisionSlot, log, pics.strip, chat);
     panel = { id: a.id, status, task, usage, decision: decisionSlot, log, model, shown: '' };
   };
 
@@ -402,7 +558,7 @@ export function initHud() {
     }
     if (panel?.id !== a.id) buildInspect(a);
     const p = panel!;
-    p.status.textContent = LABEL[a.activity];
+    p.status.textContent = a.team ? `${LABEL[a.activity]} · ${a.role === 'manager' ? 'Manager' : 'Worker'}, ${a.team}` : LABEL[a.activity];
     p.task.textContent = a.task || '—';
     p.usage.textContent = a.usage ? `${tokens(a.usage.tokens)} tokens · ${dollars(a.usage.cost)} at API prices` : '';
     if (document.activeElement !== p.model) p.model.value = a.model;

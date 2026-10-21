@@ -26,6 +26,7 @@
             <ul id="agent-list" class="list"></ul>
             <div class="row">
               <button id="hire">Hire agent</button>
+              <button id="new-team">New team...</button>
               <span id="shipped">Shipped: 0</span>
             </div>
             <label class="check"><input type="checkbox" id="auto" /> Auto-approve (let go)</label>
@@ -56,9 +57,15 @@
       <button class="start"><span class="flag"></span><b>Start</b></button>
       <span class="task">OFFICE.EXE</span>
       <span class="spacer"></span>
+      <span class="tray music"><button id="music">♪ Music</button><input id="volume" type="range" min="0" max="100" title="Volume" /></span>
       <button id="usage" class="tray usage" title="Claude Code usage">Usage</button>
       <span id="clock" class="tray"></span>
     </footer>
+
+    <section id="team-pop" class="win" hidden>
+      <div class="title"><span>New Team</span><span class="ctrls"><i id="team-close">×</i></span></div>
+      <div class="body" id="team-body"></div>
+    </section>
 
     <section id="usage-pop" class="win" hidden>
       <div class="title"><span>Usage</span><span class="ctrls"><i id="usage-close">×</i></span></div>

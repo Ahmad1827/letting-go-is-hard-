@@ -100,26 +100,36 @@ export function setupAgents(ipcMain, getWindow) {
     e.p.kill();
   }
 
-  /** Where approved work happens: a fresh worktree and branch for git projects, a new folder for new ones. */
-  async function prepareWork({ project, projectPath, branch, isNew }) {
+  /**
+   * Where approved work happens: a fresh worktree and branch for git projects.
+   * `base` starts the branch from another one (a team worker branching off the team's branch);
+   * `inPlace` works in the project folder itself (a new project's lead).
+   */
+  async function prepareWork({ project, projectPath, branch, isNew, base, inPlace }) {
     if (isNew) {
       const dir = path.join(PROJECTS_ROOT, project);
       await fs.mkdir(dir, { recursive: true });
-      await git(dir, ['init', '-q']).catch(() => {});
-      return { cwd: dir, mode: 'acceptEdits', note: `Created ${dir}` };
+      const fresh = !(await fs.access(path.join(dir, '.git')).then(() => true, () => false));
+      if (fresh) {
+        await git(dir, ['init', '-q']);
+        // a first commit so teammates have something to branch from
+        await git(dir, ['commit', '-q', '--allow-empty', '-m', `Start ${project}`]);
+      }
+      return { cwd: dir, path: dir, mode: 'acceptEdits', note: `Created ${dir}` };
     }
+    if (inPlace) return { cwd: projectPath, path: projectPath, mode: 'acceptEdits', note: `Working in ${projectPath}` };
     const isGit = await fs.access(path.join(projectPath, '.git')).then(() => true, () => false);
     const hasCommits = isGit && (await git(projectPath, ['rev-parse', '--verify', 'HEAD']).then(() => true, () => false));
     if (!hasCommits) {
       // no history to branch from: work in place, and every file change asks first
-      return { cwd: projectPath, mode: 'default', note: `${project} isn't a git repo with commits, so every change will ask first` };
+      return { cwd: projectPath, path: projectPath, mode: 'default', note: `${project} isn't a git repo with commits, so every change will ask first` };
     }
     let name = branch;
     for (let i = 2; await git(projectPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`]).then(() => true, () => false); i++) name = `${branch}-${i}`;
     const dir = path.join(WORKTREES, `${project}--${name.replace(/[^\w.-]+/g, '-')}`);
     await fs.mkdir(WORKTREES, { recursive: true });
-    await git(projectPath, ['worktree', 'add', '-q', '-b', name, dir]);
-    return { cwd: dir, mode: 'acceptEdits', branch: name, note: `Working in ${dir} on branch ${name}` };
+    await git(projectPath, ['worktree', 'add', '-q', '-b', name, dir, ...(base ? [base] : [])]);
+    return { cwd: dir, path: projectPath, mode: 'acceptEdits', branch: name, note: `Working in ${dir} on branch ${name}` };
   }
 
   ipcMain.handle('agent:start', (_e, id, cfg) => start(id, cfg));

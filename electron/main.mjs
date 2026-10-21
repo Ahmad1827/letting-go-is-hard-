@@ -17,7 +17,7 @@ function createWindow() {
     icon: path.join(here, '../build/icon.png'),
     backgroundColor: '#008080',
     show: false,
-    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(here, 'preload.cjs') },
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(here, 'preload.cjs'), autoplayPolicy: 'no-user-gesture-required' },
   });
   win.once('ready-to-show', () => win.show());
 
