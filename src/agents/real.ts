@@ -1,5 +1,5 @@
 import { OWNER } from '../owner';
-import { DEFAULT_SETTINGS, engineIn, teamId, type AgentUsage, type Crew, type CrewHooks, type UsageWindow } from './crew';
+import { DEFAULT_SETTINGS, engineIn, teamId, type AgentUsage, type Crew, type CrewHooks, type CrewSave, type UsageWindow } from './crew';
 import { branchFor } from './ideas';
 import type { AgentActivity, AgentStatus, Decision, Idea, Phase, Picture, ProjectInfo, Role, Settings, Team } from './types';
 
@@ -49,8 +49,9 @@ interface Staff {
   since: number;
   engine: string;
   model: string;
-  /** Where approved work is happening, once it starts. */
+  /** Where approved work is happening, once it starts, and its permission mode. */
   workCwd: string | null;
+  workMode: string;
   idea: Idea | null;
   seen: Set<string>;
   alive: boolean;
@@ -94,7 +95,7 @@ const PITCH_FORMAT = `\`\`\`pitch
 {"project": "<sub-folder name, or a short new folder name for a new project>", "title": "<short title>", "summary": "<2-3 sentences: what and why>", "steps": ["<step>", "<step>", "<step>"]}
 \`\`\``;
 
-const COMMIT_RULES = 'commit with clear messages using the repository\'s configured git user, and never add Co-Authored-By lines or mention Claude or AI in commits; never push';
+const COMMIT_RULES = `commit with clear messages using the repository's configured git user, and never add Co-Authored-By lines or mention Claude or AI in commits; never push; commit only to your own branch: never merge into, reset, fast-forward or otherwise update any other branch (main and master included) or touch the project's own checkout, since ${OWNER} reviews and merges your branch`;
 
 const RESEARCH_PROMPT = (name: string) => `You are ${name}, a software engineer in ${OWNER}'s office. The current folder holds ${OWNER}'s projects, one per sub-folder (ignore hidden folders).
 Right now you are researching, not building: do not create, edit, move or delete anything, and only run read-only commands. Look around with Glob, Grep and Read.
@@ -136,6 +137,9 @@ Rules: do only the task ${manager} gives you; stay inside the current folder; ${
 When you finish a task, reply with a short summary for ${manager}: what you changed and how to check it.
 ${OWNER} or ${manager} may message you; answer briefly.`;
 
+/** Told to anyone picking a job back up after the app was closed. */
+const RESUME = `The office closed while you were on this and you're back now. Check what you already did here (git status, git log, the files), then carry on and finish the job.`;
+
 const short = (s: string, n = 120) => (s.length > n ? `${s.slice(0, n - 3)}...` : s);
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24);
 
@@ -155,12 +159,107 @@ export class RealCrew implements Crew {
   }
 
   begin(agentId: string, name: string) {
-    this.staff.set(agentId, {
-      name, phase: 'research', since: Date.now(), engine: this.settings.defaultEngine, model: this.settings.defaultModel, workCwd: null, idea: null, seen: new Set(), alive: false, nudged: false, permissions: [], place: 0,
+    this.staff.set(agentId, this.fresh(name));
+    this.research(agentId);
+  }
+
+  private fresh(name: string): Staff {
+    return {
+      name, phase: 'research', since: Date.now(), engine: this.settings.defaultEngine, model: this.settings.defaultModel, workCwd: null, workMode: 'default', idea: null, seen: new Set(), alive: false, nudged: false, permissions: [], place: 0,
       pitched: false, orders: null, ordersPictures: [], team: null, role: null, assignment: null, desk: null,
       activity: 'idle', lastShown: 0, usage: { tokens: 0, cost: 0 }, sessionCost: 0,
-    });
-    this.research(agentId);
+    };
+  }
+
+  snapshot(): CrewSave {
+    // pasted pictures stay out: they're big, and the job's words carry it
+    const noPictures = (idea: Idea | null) => idea && { ...idea, pictures: undefined };
+    return {
+      staff: [...this.staff].map(([id, s]) => ({
+        id, name: s.name, engine: s.engine, model: s.model, usage: s.usage, seen: [...s.seen],
+        phase: s.pitched ? 'pitching' : s.phase,
+        idea: noPictures(s.idea),
+        work: s.workCwd ? { cwd: s.workCwd, mode: s.workMode } : null,
+        desk: s.desk, assignment: s.assignment,
+      })),
+      teams: [...this.teams.values()].map(({ job, ...t }) => ({ ...t, job: job && { ...job, idea: noPictures(job.idea) } })),
+    };
+  }
+
+  restore(save: CrewSave) {
+    for (const p of save.staff) {
+      this.staff.set(p.id, {
+        ...this.fresh(p.name), engine: p.engine, model: p.model, usage: { ...p.usage }, seen: new Set(p.seen),
+        idea: p.idea, workCwd: p.work?.cwd ?? null, workMode: p.work?.mode ?? 'default', desk: p.desk as WorkPlace | null, assignment: p.assignment,
+      });
+    }
+    for (const t of save.teams) {
+      const members = [t.manager, ...t.workers];
+      if (!members.every((id) => this.staff.has(id))) continue;
+      this.teams.set(t.id, { ...t, job: (t.job as TeamState['job']) ?? null });
+      for (const id of members) Object.assign(this.staff.get(id)!, { team: t.id, role: id === t.manager ? 'manager' : 'worker' });
+    }
+    this.pushTeams();
+    // everyone at once would be a stampede of Claude Code start-ups
+    save.staff.forEach((p, i) => window.setTimeout(() => this.resume(p.id, p.phase), 300 + i * 500));
+  }
+
+  /** Pick up where they were: back to the job, back in line, or looking for the next idea. */
+  private resume(agentId: string, phase: Phase) {
+    const s = this.staff.get(agentId);
+    if (!s) return;
+    this.note(agentId, 'Back at the office');
+    const team = this.teamOf(s);
+    if (s.role === 'worker') {
+      if (team?.job && s.desk && s.assignment) {
+        this.setPhase(s, 'work');
+        s.idea = team.job.idea;
+        s.workCwd = s.desk.cwd;
+        this.note(agentId, `Back on ${this.nameOf(team.manager)}'s task`);
+        this.emitNow(agentId, 'thinking');
+        const prompt = `Task from ${this.nameOf(team.manager)}: ${s.assignment}\n\nThe team's job, for context:\n${jobBrief(team.job.idea)}\n\n${RESUME}`;
+        this.launch(agentId, { cwd: s.desk.cwd, system: this.workerSystem(s), prompt, mode: this.workMode(s.desk.mode) });
+      } else {
+        s.assignment = null;
+        this.standby(agentId);
+      }
+      return;
+    }
+    if ((phase === 'work' || phase === 'stopped') && s.idea && s.workCwd && (!team || team.job)) {
+      this.setPhase(s, 'work');
+      this.note(agentId, `Picking "${s.idea.title}" back up`);
+      this.emitNow(agentId, 'thinking', `Back on "${s.idea.title}"`);
+      const system = team ? MANAGER_WORK_PROMPT(s.name, team.workers.map((w) => this.nameOf(w)), team.job!.branch) : WORK_PROMPT(s.name, !s.idea.path);
+      this.launch(agentId, { cwd: s.workCwd, system, prompt: `${jobBrief(s.idea)}\n\n${RESUME}`, mode: this.workMode(s.workMode) });
+    } else if ((phase === 'queued' || phase === 'pitching') && s.idea) {
+      // still has the idea: straight back in line
+      this.setPhase(s, 'queued');
+      s.place = 0;
+      this.line.push(agentId);
+      this.note(agentId, `Still has the idea for ${s.idea.project}, waiting to see ${OWNER}`);
+      this.refreshLine();
+    } else {
+      s.idea = null;
+      s.workCwd = null;
+      this.research(agentId);
+    }
+  }
+
+  fire(agentId: string) {
+    const s = this.staff.get(agentId);
+    if (!s) return;
+    const team = this.teamOf(s);
+    if (team?.manager === agentId) this.disbandTeam(team.id);
+    else if (team) {
+      team.workers = team.workers.filter((w) => w !== agentId);
+      if (team.job && this.staff.get(team.manager)?.alive)
+        this.bridge.send(team.manager, `${s.name} was let go by ${OWNER}. If their part isn't merged yet, hand it to someone else or do it yourself.`);
+      this.note(team.manager, `${s.name} was let go`);
+      this.pushTeams();
+    }
+    this.reset(agentId);
+    this.staff.delete(agentId);
+    this.checkAllDone();
   }
 
   settled(agentId: string) {
@@ -345,7 +444,7 @@ export class RealCrew implements Crew {
       this.reset(id);
       s.team = s.role = null;
       this.note(id, `${team.name} was disbanded; back to working solo`);
-      window.setTimeout(() => this.research(id), i * 1500);
+      window.setTimeout(() => this.staff.has(id) && this.research(id), i * 1500);
     });
     this.pushTeams();
   }
@@ -365,6 +464,8 @@ export class RealCrew implements Crew {
     this.bridge.stop(agentId);
     s.alive = false;
     window.clearTimeout(s.breakTimer);
+    window.clearTimeout(s.showTimer);
+    s.showTimer = undefined;
     s.permissions = [];
     s.assignment = null;
     s.desk = null;
@@ -442,6 +543,7 @@ export class RealCrew implements Crew {
       idea.branch = place.branch ?? idea.branch;
       this.note(agentId, place.note);
       s.workCwd = place.cwd;
+      s.workMode = place.mode;
       this.launch(agentId, { cwd: place.cwd, model: s.model || undefined, system: WORK_PROMPT(s.name, !idea.path), prompt: content(jobBrief(idea), idea.pictures), mode: this.workMode(place.mode) });
     } catch (e) {
       this.note(agentId, `Couldn't set up the work: ${(e as Error).message}`);
@@ -466,6 +568,7 @@ export class RealCrew implements Crew {
       for (const w of team.workers) this.note(w, `${team.name} is starting on "${idea.title}" (${idea.project})`);
       const workers = team.workers.map((w) => this.nameOf(w));
       s.workCwd = place.cwd;
+      s.workMode = place.mode;
       this.launch(team.manager, { cwd: place.cwd, model: s.model || undefined, system: MANAGER_WORK_PROMPT(s.name, workers, team.job.branch), prompt: content(jobBrief(idea), idea.pictures), mode: this.workMode(place.mode) });
     } catch (e) {
       this.note(team.manager, `Couldn't set up the team's work: ${(e as Error).message}`);
@@ -524,7 +627,8 @@ export class RealCrew implements Crew {
   }
 
   private launch(agentId: string, cfg: StartConfig) {
-    const s = this.staff.get(agentId)!;
+    const s = this.staff.get(agentId);
+    if (!s) return; // let go while their folder was being set up
     s.alive = true;
     s.sessionCost = 0;
     this.bridge.start(agentId, { ...cfg, engine: s.engine, model: cfg.model ?? (s.model || undefined) }).catch((e: Error) => {

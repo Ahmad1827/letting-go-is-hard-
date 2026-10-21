@@ -4,6 +4,7 @@ import type { AgentActivity, AgentStatus, Decision, Idea, Role, Settings, Team }
 import { Lofi } from '../audio/lofi';
 import { OWNER } from '../owner';
 import { byId, el } from './dom';
+import { badge, initPanels, panels } from './panels';
 import { acceptPictures } from './paste';
 import { initWindows } from './windows';
 
@@ -141,13 +142,18 @@ function initOffice() {
     box.replaceChildren(card);
   };
 
+  let inLine = 0;
+  const flag = () => badge('office', inLine, !!pitch);
   bus.on('pitch', (view: PitchView | null) => {
     pitch = view;
     render();
+    flag();
   });
   bus.on('queue', (names: string[]) => {
     const outside = names.slice(1); // the first in line is in the office or on the way in
     waiting.textContent = outside.length ? `Waiting: ${outside.join(', ')}` : 'Nobody waiting.';
+    inLine = names.length;
+    flag();
   });
   render();
 }
@@ -177,11 +183,10 @@ function meter(fraction: number) {
 
 /**
  * Usage: the plan's windows as Claude Code reports them (5-hour, weekly), plus
- * tokens per agent this session. Lives in the taskbar; click it for details.
+ * tokens per agent. The rail tab carries a small meter; its panel has the details.
  */
 function initUsage() {
-  const tray = byId('usage');
-  const pop = byId('usage-pop');
+  const tray = byId('usage-meter');
   const body = byId('usage-body');
   const KEY = 'lgih.limits';
   let limits: Limits | null = null;
@@ -196,16 +201,13 @@ function initUsage() {
   const windows = () => Object.entries(limits?.windows ?? {}).sort(([a], [b]) => (a === 'five_hour' ? -1 : b === 'five_hour' ? 1 : a.localeCompare(b)));
 
   const renderTray = () => {
-    const ws = windows().slice(0, 2);
-    if (!ws.length) {
-      tray.replaceChildren('Usage');
-      return;
-    }
-    tray.replaceChildren(...ws.flatMap(([k, w]) => [el('span', 'tray-label', WINDOW_NAMES[k] ?? k), meter(w.utilization), el('span', 'tray-pct', `${Math.round(w.utilization * 100)}%`)]));
+    const [first] = windows();
+    tray.replaceChildren(...(first ? [meter(first[1].utilization)] : []));
+    tray.title = first ? `${WINDOW_NAMES[first[0]] ?? first[0]}: ${Math.round(first[1].utilization * 100)}%` : '';
   };
 
   const renderPop = () => {
-    if (pop.hidden) return;
+    if (!panels.isOpen('usage')) return;
     const parts: HTMLElement[] = [];
     parts.push(el('b', undefined, 'Your Claude plan'));
     if (windows().length) {
@@ -223,7 +225,7 @@ function initUsage() {
     } else parts.push(el('p', 'hint', real ? 'No numbers yet. They show up once an agent starts working.' : 'Simulated agents don’t use your plan.'));
 
     const used = staff.filter((a) => a.usage);
-    parts.push(el('b', undefined, 'This session'));
+    parts.push(el('b', undefined, 'Per agent'));
     if (used.length) {
       const table = el('table', 'usage-table');
       const head = el('tr');
@@ -245,11 +247,7 @@ function initUsage() {
     body.replaceChildren(...parts);
   };
 
-  tray.onclick = () => {
-    pop.hidden = !pop.hidden;
-    renderPop();
-  };
-  byId('usage-close').onclick = () => (pop.hidden = true);
+  bus.on('panel', (name: string, on: boolean) => name === 'usage' && on && renderPop());
   bus.on('usage:limits', (l: Limits) => {
     limits = l;
     try {
@@ -346,10 +344,12 @@ function initTeams() {
   bus.on('teams', (list: Team[]) => (teams = list));
 }
 
-/** Lo-fi music in the taskbar: on/off and volume, remembered between runs. */
+/** Lo-fi music: on/off and volume, remembered between runs. */
 function initMusic() {
   const button = byId('music') as HTMLButtonElement;
   const slider = byId('volume') as HTMLInputElement;
+  const note = byId('music-note');
+  const tab = byId('tab-music');
   const KEY = 'lgih.music';
   let prefs = { on: true, volume: 0.5 };
   try {
@@ -369,11 +369,11 @@ function initMusic() {
   slider.value = String(Math.round(prefs.volume * 100));
   let stalled = false;
   const show = () => {
-    button.textContent = stalled ? '♪ No sound' : prefs.on ? '♪ Music' : '♪ Off';
-    button.classList.toggle('off', stalled || !prefs.on);
-    button.title = stalled
-      ? "The sound device stopped taking audio, so the music stopped. On WSL that's WSL's audio bridge to Windows: restarting WSL (wsl --shutdown in a Windows terminal) fixes it. Click to try again."
-      : prefs.on ? 'Lo-fi music is playing. Click to stop.' : 'Click for lo-fi music.';
+    button.textContent = stalled ? '♪ Try again' : prefs.on ? '♪ Stop the music' : '♪ Play music';
+    tab.classList.toggle('off', stalled || !prefs.on);
+    note.textContent = stalled
+      ? "The sound device stopped taking audio, so the music stopped. On WSL that's WSL's audio bridge to Windows: restarting WSL (wsl --shutdown in a Windows terminal) fixes it."
+      : prefs.on ? 'Lo-fi beats for the night shift.' : 'The office is quiet.';
   };
   music.onStall = () => {
     stalled = true;
@@ -410,6 +410,10 @@ function initMusic() {
 function initGoodbye() {
   const box = byId('goodbye');
   byId('goodbye-name').textContent = `Goodbye, ${OWNER}.`;
+  bus.on('shutdown', () => {
+    document.body.classList.add('leaving');
+    for (const m of document.querySelectorAll<HTMLElement>('.modal')) m.hidden = true;
+  });
   bus.on('goodbye', () => {
     box.hidden = false;
     requestAnimationFrame(() => box.classList.add('shown'));
@@ -420,6 +424,7 @@ function initGoodbye() {
 }
 
 export function initHud() {
+  initPanels();
   initGoodbye();
   initWindows();
   initMusic();
@@ -500,6 +505,7 @@ export function initHud() {
   });
 
   const renderRequests = () => {
+    badge('requests', approvals.length, approvals.length > 0);
     if (!approvals.length) {
       requests.replaceChildren(el('li', 'empty', 'No pending requests.'));
       return;
@@ -557,7 +563,24 @@ export function initHud() {
     // only worth showing the engine when there's a choice
     if (settings.engines.length > 1) label.prepend(engine);
     label.append(model);
-    controls.append(label, stop);
+    const fire = el('button', 'danger', 'Fire');
+    fire.title = `Let ${a.name} go for good`;
+    fire.onclick = () => {
+      // ask first, right here
+      const sure = el('div', 'confirm');
+      const yes = el('button', 'danger', `Yes, fire ${a.name}`);
+      const no = el('button', undefined, 'Keep');
+      yes.onclick = () => {
+        bus.emit('agent:fire', a.id);
+        panels.close('agent');
+      };
+      no.onclick = () => sure.replaceWith(controls);
+      sure.append(el('span', undefined, `${a.name} stops, packs up and leaves. Their branches stay.`), yes, no);
+      controls.replaceWith(sure);
+    };
+    const buttons = el('div', 'buttons');
+    buttons.append(stop, fire);
+    controls.append(label, buttons);
 
     const decisionSlot = el('div');
     const log = el('pre', 'log');
@@ -617,11 +640,16 @@ export function initHud() {
     selected = id;
     renderList();
     renderInspect();
+    panels.open('agent');
   });
   bus.on('shipped', (n: number) => (shipped.textContent = `Shipped: ${n}`));
   bus.on('hire:full', () => {
     hire.disabled = true;
     hire.textContent = 'Floor is full';
+  });
+  bus.on('hire:open', () => {
+    hire.disabled = false;
+    hire.textContent = 'Hire agent';
   });
 
   hire.onclick = () => {

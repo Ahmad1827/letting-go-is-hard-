@@ -6,82 +6,92 @@
     <title>Letting Go Is Hard</title>
   </head>
   <body>
-    <div id="desktop">
-      <section class="win" id="office-win">
-        <div class="title"><span>OFFICE.EXE: One World Trade Center, Floor 88</span><span class="ctrls"><i>_</i><i>□</i><i>×</i></span></div>
-        <div class="toolbar">
-          <button id="zoom-out" title="Zoom out (-)">&minus;</button>
-          <span id="zoom-level" class="zoom">100%</span>
-          <button id="zoom-in" title="Zoom in (+)">+</button>
-          <button id="zoom-fit" title="Whole floor (F)">Whole floor</button>
-          <button id="board-open" title="Everyone and what they're working on">Work Board</button>
-          <span class="hint">Scroll to zoom, drag or use arrow keys to move around</span>
-        </div>
-        <div id="game"></div>
-      </section>
+    <div id="game"></div>
 
-      <aside id="side">
-        <section class="win">
-          <div class="title"><span>Staff Directory</span></div>
-          <div class="body">
-            <ul id="agent-list" class="list"></ul>
-            <div class="row">
-              <button id="hire">Hire agent</button>
-              <button id="new-team">New team...</button>
-              <span id="shipped">Shipped: 0</span>
-            </div>
-            <label class="check"><input type="checkbox" id="auto" /> Auto-approve (let go)</label>
-          </div>
-        </section>
-
-        <section class="win">
-          <div class="title"><span id="office-title">Ahmad's Office</span></div>
-          <div class="body">
-            <div id="pitch"></div>
-            <p id="waiting" class="hint">Nobody waiting.</p>
-          </div>
-        </section>
-
-        <section class="win">
-          <div class="title"><span>Commands Waiting for OK</span></div>
-          <div class="body"><ul id="requests" class="list requests"></ul></div>
-        </section>
-
-        <section class="win grow">
-          <div class="title"><span>Properties</span></div>
-          <div class="body" id="inspect"></div>
-        </section>
-      </aside>
+    <div id="zoombar" class="hud">
+      <button id="zoom-out" title="Zoom out (-)">&minus;</button>
+      <span id="zoom-level">100%</span>
+      <button id="zoom-in" title="Zoom in (+)">+</button>
+      <button id="zoom-fit" title="Whole floor (F)" data-icon="fit"></button>
     </div>
 
-    <footer id="taskbar">
-      <button id="start" class="start"><span class="flag"></span><b>Start</b></button>
-      <div id="start-menu" class="win start-menu" hidden></div>
-      <span class="task">OFFICE.EXE</span>
-      <span class="spacer"></span>
-      <span class="tray music"><button id="music">♪ Music</button><input id="volume" type="range" min="0" max="100" title="Volume" /></span>
-      <button id="usage" class="tray usage" title="Claude Code usage">Usage</button>
-      <span id="clock" class="tray"></span>
-    </footer>
+    <nav id="dock" class="hud">
+      <button id="dock-toggle" title="Show or hide the icons"><i data-icon="menu"></i><b class="badge" hidden></b></button>
+      <div class="dock-icons">
+        <button class="tab" id="tab-staff" data-panel="staff" title="Staff"><i data-icon="staff"></i></button>
+        <button class="tab" id="tab-office" data-panel="office" title="Pitches in your office"><i data-icon="office"></i><b class="badge" hidden></b></button>
+        <button class="tab" id="tab-requests" data-panel="requests" title="Commands waiting for your OK"><i data-icon="requests"></i><b class="badge" hidden></b></button>
+        <button class="tab" id="tab-agent" data-panel="agent" title="The selected employee"><i data-icon="agent"></i></button>
+        <button class="tab" id="tab-usage" data-panel="usage" title="Claude Code usage"><i data-icon="usage"></i><span id="usage-meter" class="mini-meter"></span></button>
+        <button class="tab" id="tab-music" data-panel="music" title="Music"><i data-icon="music"></i></button>
+        <span class="dock-sep"></span>
+        <button class="tab" id="board-open" title="Work Board: everyone and what they're working on"><i data-icon="board"></i></button>
+        <button class="tab" id="settings-open" title="Settings"><i data-icon="settings"></i></button>
+        <button class="tab" id="power" title="Close the office"><i data-icon="power"></i></button>
+        <span id="clock"></span>
+      </div>
+    </nav>
 
-    <section id="board-pop" class="win popup" hidden>
-      <div class="title"><span>Work Board</span><span class="ctrls"><i id="board-pop-close">×</i></span></div>
+    <div id="windows">
+      <section class="panel" id="panel-staff" hidden>
+        <header><span>Staff</span><span class="ctrls"><button class="x" data-min="staff" title="Minimize">_</button><button class="x" data-close="staff" title="Close">×</button></span></header>
+        <div class="body">
+          <ul id="agent-list" class="list"></ul>
+          <div class="row">
+            <button id="hire" class="primary">Hire agent</button>
+            <button id="new-team">New team...</button>
+            <span id="shipped">Shipped: 0</span>
+          </div>
+          <label class="check"><input type="checkbox" id="auto" /> Auto-approve pitches (let go)</label>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-office" hidden>
+        <header><span id="office-title">Ahmad's Office</span><span class="ctrls"><button class="x" data-min="office" title="Minimize">_</button><button class="x" data-close="office" title="Close">×</button></span></header>
+        <div class="body">
+          <div id="pitch"></div>
+          <p id="waiting" class="hint">Nobody waiting.</p>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-requests" hidden>
+        <header><span>Waiting for your OK</span><span class="ctrls"><button class="x" data-min="requests" title="Minimize">_</button><button class="x" data-close="requests" title="Close">×</button></span></header>
+        <div class="body"><ul id="requests" class="list requests"></ul></div>
+      </section>
+
+      <section class="panel grow" id="panel-agent" hidden>
+        <header><span>Agent</span><span class="ctrls"><button class="x" data-min="agent" title="Minimize">_</button><button class="x" data-close="agent" title="Close">×</button></span></header>
+        <div class="body" id="inspect"></div>
+      </section>
+
+      <section class="panel" id="panel-usage" hidden>
+        <header><span>Usage</span><span class="ctrls"><button class="x" data-min="usage" title="Minimize">_</button><button class="x" data-close="usage" title="Close">×</button></span></header>
+        <div class="body" id="usage-body"></div>
+      </section>
+
+      <section class="panel" id="panel-music" hidden>
+        <header><span>Music</span><span class="ctrls"><button class="x" data-min="music" title="Minimize">_</button><button class="x" data-close="music" title="Close">×</button></span></header>
+        <div class="body music">
+          <button id="music">♪ Music</button>
+          <input id="volume" type="range" min="0" max="100" title="Volume" />
+          <p id="music-note" class="hint"></p>
+        </div>
+      </section>
+    </div>
+
+    <section id="board-pop" class="popup modal" hidden>
+      <header><span>Work Board</span><button class="x" id="board-pop-close">×</button></header>
       <div class="body" id="board-pop-body"></div>
     </section>
 
-    <section id="settings-pop" class="win popup" hidden>
-      <div class="title"><span>Settings</span><span class="ctrls"><i id="settings-pop-close">×</i></span></div>
+    <section id="settings-pop" class="popup modal" hidden>
+      <header><span>Settings</span><button class="x" id="settings-pop-close">×</button></header>
       <div class="body" id="settings-pop-body"></div>
     </section>
 
-    <section id="team-pop" class="win" hidden>
-      <div class="title"><span>New Team</span><span class="ctrls"><i id="team-close">×</i></span></div>
+    <section id="team-pop" class="modal" hidden>
+      <header><span>New Team</span><button class="x" id="team-close">×</button></header>
       <div class="body" id="team-body"></div>
-    </section>
-
-    <section id="usage-pop" class="win" hidden>
-      <div class="title"><span>Usage</span><span class="ctrls"><i id="usage-close">×</i></span></div>
-      <div class="body" id="usage-body"></div>
     </section>
 
     <div id="goodbye" hidden>

@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setupAgents } from './agents.mjs';
@@ -107,6 +108,23 @@ ipcMain.handle('projects:list', () => listProjects());
 ipcMain.handle('settings:get', () => settings());
 ipcMain.handle('settings:set', (_e, next) => saveSettings(next));
 ipcMain.handle('engine:test', (_e, engine) => testEngine(engine));
+// who works here, remembered between runs; written synchronously so it lands even while quitting
+const memoryFile = () => path.join(app.getPath('userData'), 'office.json');
+ipcMain.handle('memory:load', () => {
+  try {
+    return JSON.parse(readFileSync(memoryFile(), 'utf8'));
+  } catch {
+    return null;
+  }
+});
+ipcMain.on('memory:save', (_e, data) => {
+  try {
+    writeFileSync(`${memoryFile()}.tmp`, JSON.stringify(data));
+    renameSync(`${memoryFile()}.tmp`, memoryFile());
+  } catch (e) {
+    console.error('Could not save the office:', e.message);
+  }
+});
 ipcMain.on('app:close', () => win?.close());
 ipcMain.on('app:close-ready', () => win && !win.isDestroyed() && win.destroy());
 // everyone finished while the window was hidden: time to go home

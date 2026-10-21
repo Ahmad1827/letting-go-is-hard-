@@ -24,7 +24,7 @@ Each agent loops through the same cycle:
 1. **Research**: looks through the folders in `~/proiecte` (in the conference room and the archive).
 2. **Queue**: walks to the line outside Ahmad's office. One pitches at a time, three
    wait at the door, the rest wait at their desks.
-3. **Pitch**: stands at Ahmad's desk. The *Ahmad's Office* panel shows the idea, the
+3. **Pitch**: stands at Ahmad's desk. The *Office* panel shows the idea, the
    plan and the git branch it would use. You can:
    - **Approve**: they go and do it, on its own branch.
    - **Don't approve**: they go back and come up with something else.
@@ -32,7 +32,7 @@ Each agent loops through the same cycle:
      pitch): they work out which project you mean, or start a new one, and get going
      without pitching again.
 4. **Work**: types at their desk, runs things at the mainframe, and asks before risky
-   commands (*Commands Waiting for OK*), then drops the result in the mail room outbox.
+   commands (the *OKs* panel), then drops the result in the mail room outbox.
 
 *Auto-approve (let go)* approves pitches and commands without asking.
 
@@ -59,16 +59,17 @@ permission prompts:
 - Approved work happens in a git worktree under `~/proiecte/.letting-go/worktrees/` on the
   agent's own branch, so your checkout is never touched. Agents commit there and never push.
   A project without git history gets edited in place, and every change asks first.
-- Commands that need permission show up under *Commands Waiting for OK*.
+- Commands that need permission show up in the *OKs* panel.
 
 **Pictures:** paste (Ctrl+V) or drop pictures into an agent's message box, the "do this
 instead" box on a pitch, or a new team's task. They go to Claude along with your words.
 
 **Music:** lo-fi office music plays in the background, generated live in the app (no audio
-files). Turn it off or change the volume in the taskbar; it remembers your choice.
+files). Turn it off or change the volume in the *Music* panel; it remembers your choice.
 
-The taskbar shows your plan's usage (the 5-hour and weekly windows, as Claude Code reports
-them). Click it for reset times and how many tokens each agent has used this session.
+The *Usage* tab carries a small meter for your plan's 5-hour window; its panel shows every
+window Claude Code reports (5-hour, weekly), when they reset, and how many tokens each agent
+has used.
 
 **Auto mode:** approved work runs in Claude Code's auto mode, so agents decide what's safe
 on their own and only genuinely risky actions ask. Switch to "ask me" in Settings.
@@ -79,19 +80,30 @@ background. If yes, the window hides, each agent finishes only the job you alrea
 refused elsewhere), nobody starts anything new, and the app quits by itself when everyone
 is done. Open the app again to bring the window back.
 
-**Settings** (Start menu): your projects folder, your AI engines, which engine and model new
+**Settings** (the gear on the right): your projects folder, your AI engines, which engine and model new
 hires use, approvals, and what closing does. An engine is any Claude Code-compatible command
 plus environment variables and a model list. Claude Code is built in; point it at another
 LLM with `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, or another account with
 `CLAUDE_CONFIG_DIR`.
 
-**Work Board:** click the corkboard in Ahmad's office (or *Work Board* in the toolbar or
-Start menu) to see everyone, grouped by team, with where they are in the cycle, what they're
+**Work Board:** click the corkboard in Ahmad's office (or *Board* on the right) to see everyone, grouped by team, with where they are in the cycle, what they're
 doing, the project and branch, and how long they've been at it.
 
 Click an agent to see their full log, switch their model (Fable 5.1, Opus 5.5, Sonnet 5.5,
-Haiku 5.5, older versions, or Claude Code's default), stop them, or message them. In a plain browser (`npx vite`) the
-agents are simulated instead (`src/agents/sim.ts`).
+Haiku 5.5, older versions, or Claude Code's default), stop them, message them, or fire them.
+In a plain browser (`npx vite`) the agents are simulated instead (`src/agents/sim.ts`).
+
+**Staff are remembered.** Close the app and open it again and everyone is back at their
+desk, with their model, team, log and usage. Whoever was in the middle of an approved job
+picks it back up on the same branch, whoever was waiting to pitch gets back in line, and the
+rest go looking for their next idea. People only leave when you **Fire** them (in their
+panel, with a confirmation): they stop, walk to the elevator and go, their desk frees up,
+and their branches stay. The office is saved in `office.json` in the app's data folder.
+
+**Screen:** the office fills the window. The tabs down the right edge (Staff, Office, OKs,
+Agent, Usage, Music) slide their panels out over the floor and back; a badge on *Office*
+counts who's waiting to pitch and *OKs* counts commands waiting for you. Zoom is in the
+bottom-left corner. Open panels are remembered too.
 
 `LETTING_GO_PROJECTS=/some/folder npm run dev` points the agents at another projects folder,
 and `CLAUDE_BIN` picks a different `claude` executable.
@@ -131,7 +143,8 @@ CRTs glowing, and says goodbye before the app quits. Running agents are stopped 
 - `src/scenes/OfficeScene.ts`: turns events into movement, bubbles, screens and approvals.
 - `src/world/map.ts`: floor plan, furniture, walkable grid, pathfinding.
 - `src/art/`: all pixel art, drawn in code (no image assets).
-- `src/ui/hud.ts`: the Windows 95 side panels.
-- `src/ui/windows.ts`: Start menu, Settings and the Work Board.
+- `src/ui/hud.ts`: what's in the side panels.
+- `src/ui/panels.ts`: the tab rail, sliding panels and pixel icons.
+- `src/ui/windows.ts`: Settings and the Work Board.
 - `src/ui/paste.ts`: pasting and dropping pictures into text boxes.
 - `src/audio/lofi.ts`: the generated lo-fi music.

@@ -8,6 +8,11 @@ contextBridge.exposeInMainWorld('office', {
     set: (next) => ipcRenderer.invoke('settings:set', next),
     testEngine: (engine) => ipcRenderer.invoke('engine:test', engine),
   },
+  /** The staff and teams from last time, and saving them for next time. */
+  memory: {
+    load: () => ipcRenderer.invoke('memory:load'),
+    save: (data) => ipcRenderer.send('memory:save', data),
+  },
   app: {
     /** Close like the window's X button would (with the background question and the goodbye). */
     close: () => ipcRenderer.send('app:close'),

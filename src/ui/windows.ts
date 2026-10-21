@@ -6,8 +6,8 @@ import { byId, el } from './dom';
 import { DOT, LABEL, type AgentView } from './hud';
 
 /**
- * The bigger windows: the Start menu, Settings (AI engines and how agents
- * behave) and the Work Board in the owner's office.
+ * The bigger windows: Settings (AI engines and how agents behave) and the
+ * Work Board in the owner's office.
  */
 
 type Bridge = { settings?: { testEngine(e: EngineConfig): Promise<{ ok: boolean; text: string }> } };
@@ -25,35 +25,6 @@ function popup(id: string) {
   };
   byId(`${id}-close`).onclick = () => (pop.hidden = true);
   return { pop, body: byId(`${id}-body`), show, hide: () => (pop.hidden = true) };
-}
-
-// ------------------------------------------------------------------ Start menu
-
-function initStart() {
-  const menu = byId('start-menu');
-  const button = byId('start');
-  const item = (label: string, run: () => void) => {
-    const b = el('button', 'menu-item', label);
-    b.onclick = () => {
-      menu.hidden = true;
-      run();
-    };
-    return b;
-  };
-  menu.replaceChildren(
-    el('div', 'menu-side', 'Letting Go 95'),
-    item('Work Board', () => bus.emit('board:open')),
-    item('Settings...', () => bus.emit('settings:open')),
-    el('hr'),
-    item('Shut Down...', () => bus.emit('app:close')),
-  );
-  button.onclick = (e) => {
-    e.stopPropagation();
-    menu.hidden = !menu.hidden;
-  };
-  document.addEventListener('pointerdown', (e) => {
-    if (!menu.contains(e.target as Node) && e.target !== button) menu.hidden = true;
-  });
 }
 
 // ------------------------------------------------------------------ Settings
@@ -301,7 +272,7 @@ function initBoard() {
     ] as [number, string][])
       summary.append(el('span', 'chip', `${n} ${label}`));
     const parts: HTMLElement[] = [summary];
-    if (!agents.length) parts.push(el('p', 'hint', 'Nobody hired yet. Use Hire agent in the Staff Directory.'));
+    if (!agents.length) parts.push(el('p', 'hint', 'Nobody hired yet. Use Hire agent in the Staff panel.'));
     const inTeam = new Set<string>();
     for (const t of teams) {
       const box = el('fieldset', 'board-group');
@@ -336,11 +307,9 @@ function initBoard() {
 }
 
 export function initWindows() {
-  byId('board-open').onclick = () => bus.emit('board:open');
   bus.on('settings', (s: Settings) => (settings = s));
   bus.on('agents', (views: AgentView[]) => (agents = views));
   bus.on('teams', (list: Team[]) => (teams = list));
-  initStart();
   initSettings();
   initBoard();
 }

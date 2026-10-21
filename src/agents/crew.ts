@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentStatus, Decision, Idea, Picture, ProjectInfo, Settings, Team } from './types';
+import type { AgentEvent, AgentStatus, Decision, Idea, Phase, Picture, ProjectInfo, Settings, Team } from './types';
 
 /** One of the plan's usage windows, as Claude Code reports it. */
 export interface UsageWindow { utilization: number; resetsAt: number }
@@ -6,6 +6,29 @@ export interface UsageWindow { utilization: number; resetsAt: number }
 export interface Limits { status?: string; windows: Record<string, UsageWindow>; at: number }
 /** What one agent has used so far: tokens, and what that would cost at API prices. */
 export interface AgentUsage { tokens: number; cost: number }
+
+/** One employee as remembered between runs. */
+export interface StaffSave {
+  id: string;
+  name: string;
+  engine: string;
+  model: string;
+  usage: AgentUsage;
+  seen: string[];
+  phase: Phase;
+  idea: Idea | null;
+  /** Where their approved work was happening, and the permission mode it ran in. */
+  work: { cwd: string; mode: string } | null;
+  /** Worker: their branch folder and the manager's task. */
+  desk: unknown;
+  assignment: string | null;
+}
+
+/** A team as remembered, with its job if it had one going. */
+export interface TeamSave extends Team { job?: unknown }
+
+/** Everything the crew needs to pick up where it left off. */
+export interface CrewSave { staff: StaffSave[]; teams: TeamSave[] }
 
 /** What the office needs to hear from whoever runs the agents. */
 export interface CrewHooks {
@@ -29,6 +52,12 @@ export interface Crew {
   autoApprove: boolean;
   projects: ProjectInfo[];
   begin(agentId: string, name: string): void;
+  /** What to remember about everyone, for next time. */
+  snapshot(): CrewSave;
+  /** Bring back the staff from last time; their characters are already at their desks. */
+  restore(save: CrewSave): void;
+  /** Let someone go for good: stop them, take them off their team and out of the line. */
+  fire(agentId: string): void;
   /** The character reached the place for its current activity. */
   settled(agentId: string): void;
   /** Answer a pending permission request. */

@@ -10,7 +10,7 @@ new Phaser.Game({
   parent: 'game',
   pixelArt: true,
   roundPixels: true,
-  backgroundColor: '#1b1b1b',
+  backgroundColor: '#05081a',
   scale: { mode: Phaser.Scale.RESIZE },
   scene: [OfficeScene],
 });

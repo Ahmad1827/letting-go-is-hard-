@@ -5,7 +5,7 @@ import { buildProps } from '../art/props';
 import { buildRooms } from '../art/rooms';
 import { buildBand, GLASS_TOP, MULLION_STEP, MULLION_W, SILL } from '../art/skyline';
 import { Agent } from '../agents/Agent';
-import { DEFAULT_SETTINGS, type Crew, type CrewHooks } from '../agents/crew';
+import { DEFAULT_SETTINGS, type Crew, type CrewHooks, type CrewSave } from '../agents/crew';
 import { RealCrew, type AgentBridge } from '../agents/real';
 import { Sim } from '../agents/sim';
 import type { AgentEvent, Decision, Idea, Picture, ProjectInfo, Settings, Team } from '../agents/types';
@@ -22,6 +22,7 @@ interface OfficeBridge {
   listProjects(): Promise<ProjectInfo[]>;
   agents?: AgentBridge;
   settings?: { get(): Promise<Settings>; set(next: Settings): Promise<Settings> };
+  memory?: { load(): Promise<OfficeSave | null>; save(data: OfficeSave): void };
   app?: {
     close(): void;
     onWorkingQuery(count: () => number): void;
@@ -29,6 +30,18 @@ interface OfficeBridge {
     allDone(): void;
   };
 }
+
+/** The office as remembered between runs: who sits where, their logs, and the crew's own state. */
+interface OfficeSave {
+  v: 1;
+  shipped: number;
+  agents: { id: string; name: string; cast: number; desk: number; log: string[] }[];
+  crew: CrewSave;
+}
+
+const SAVE_KEY = 'lgih.office';
+/** Log lines kept per person between runs. */
+const SAVED_LOG = 120;
 
 /** Merge tiles into rectangles [x, y, w, h]: runs along each row, stacked where rows match. */
 function mergeTiles(tiles: [number, number][]): [number, number, number, number][] {
@@ -88,6 +101,11 @@ const ZOOMS = [0.5, 0.75, 1, 2, 3];
 
 export class OfficeScene extends Phaser.Scene {
   private agents = new Map<string, Agent>();
+  /** Fired staff on their way to the elevator. */
+  private leaving = new Set<Agent>();
+  private saveTimer?: number;
+  /** Closing: what's on screen now is what gets remembered. */
+  private frozen = false;
   /** agent id -> desk id, including agents still in the elevator */
   private hired = new Map<string, number>();
   private arrivals: { at: number; then: () => void }[] = [];
@@ -147,13 +165,19 @@ export class OfficeScene extends Phaser.Scene {
         this.dirty = true;
         bus.emit('teams', list);
       },
-      allDone: () => this.office()?.app?.allDone(),
+      allDone: () => {
+        // the app quits right after this: remember that everyone went home
+        this.save();
+        this.office()?.app?.allDone();
+      },
     };
     // inside the desktop app the staff are real Claude Code sessions; in a plain browser they're simulated
     const bridge = this.office()?.agents;
     this.crew = bridge ? new RealCrew(bridge, hooks) : new Sim(this.time, hooks);
     bus.emit('crew', this.crew.real);
-    void this.loadSettings().then(() => this.loadProjects());
+    void this.loadSettings()
+      .then(() => this.loadProjects())
+      .then(() => this.loadStaff());
     // closing with work in progress: Electron asks how many are mid-job, and may hide the window
     this.office()?.app?.onWorkingQuery(() => this.crew.workingCount());
     this.office()?.app?.onBackground((on) => {
@@ -172,7 +196,12 @@ export class OfficeScene extends Phaser.Scene {
       if (a) this.cameras.main.pan(a.sprite.x, a.sprite.y - 40, 500, 'Sine.easeInOut');
     });
     bus.on('hire', () => this.hire());
-    bus.on('shutdown', (done: () => void) => this.lightsOut(done));
+    bus.on('shutdown', (done: () => void) => {
+      this.save();
+      this.frozen = true;
+      this.lightsOut(done);
+    });
+    bus.on('agent:fire', (id: string) => this.fire(id));
     bus.on('approval:resolve', ({ id, ok }: { id: string; ok: boolean }) => this.resolve(id, ok));
     bus.on('pitch:decide', ({ id, decision }: { id: string; decision: Decision }) => this.crew.decide(id, decision));
     bus.on('agent:say', ({ id, text, pictures }: { id: string; text: string; pictures?: Picture[] }) => this.crew.say(id, text, pictures));
@@ -199,13 +228,11 @@ export class OfficeScene extends Phaser.Scene {
       if (on) for (const id of [...this.pending.keys()]) this.resolve(id, true);
     });
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => bus.removeAllListeners());
-
-    // simulated staff show up on their own; real ones are hired one by one, since each runs Claude Code
-    if (!this.crew.real) [300, 2600, 4900].forEach((ms) => this.time.delayedCall(ms, () => this.hire()));
   }
 
   update(time: number, delta: number) {
     for (const a of this.agents.values()) a.update(time, delta);
+    for (const a of this.leaving) a.update(time, delta);
     const sel = this.selected && this.agents.get(this.selected);
     this.ring.setVisible(!!sel);
     if (sel) this.ring.setPosition(Math.round(sel.sprite.x), Math.round(sel.sprite.y)).setDepth(sel.sprite.depth - 0.5);
@@ -218,7 +245,7 @@ export class OfficeScene extends Phaser.Scene {
   private setupCamera() {
     const cam = this.cameras.main;
     cam.setBounds(0, 0, WIDTH, HEIGHT).setRoundPixels(true);
-    cam.setZoom(1).centerOn(19.5 * TILE, 17 * TILE);
+    cam.setZoom(Math.max(1, this.fitZoom())).centerOn(19.5 * TILE, 17 * TILE);
 
     this.input.on('wheel', (p: Phaser.Input.Pointer, _o: unknown, _dx: number, dy: number) => this.zoomStep(dy > 0 ? -1 : 1, p.x, p.y));
 
@@ -243,13 +270,18 @@ export class OfficeScene extends Phaser.Scene {
       if (e.key === '0' || e.key === 'f') this.zoomTo(this.fitZoom());
     });
     bus.on('zoom', (how: 'in' | 'out' | 'fit') => (how === 'fit' ? this.zoomTo(this.fitZoom()) : this.zoomStep(how === 'in' ? 1 : -1)));
-    this.scale.on('resize', () => this.emitZoom());
+    // a bigger window (fullscreen, maximised) never shows past the edge of the floor
+    this.scale.on('resize', () => {
+      if (cam.zoom < this.fitZoom()) this.zoomTo(this.fitZoom());
+      else this.emitZoom();
+    });
     this.emitZoom();
   }
 
+  /** As far out as it goes: the floor fills the window both ways, so there's never empty space around it. */
   private fitZoom() {
     const cam = this.cameras.main;
-    return Math.min(cam.width / WIDTH, cam.height / HEIGHT);
+    return Math.max(cam.width / WIDTH, cam.height / HEIGHT);
   }
 
   /** Step through the zoom levels, keeping the point under the cursor in place. */
@@ -455,9 +487,9 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   /** One elevator trip at a time; later arrivals wait their turn. */
-  private openElevator(then: () => void) {
-    this.arrivals.push({ at: this.nextElevator, then });
-    this.nextElevator = (this.nextElevator + 1) % ELEVATORS.length;
+  private openElevator(then: () => void, at?: number) {
+    this.arrivals.push({ at: at ?? this.nextElevator, then });
+    if (at === undefined) this.nextElevator = (this.nextElevator + 1) % ELEVATORS.length;
     if (this.arrivals.length === 1) this.elevatorTrip();
   }
 
@@ -503,6 +535,100 @@ export class OfficeScene extends Phaser.Scene {
       this.note(id, `${name} arrived on the floor`);
       this.crew.begin(id, name);
     });
+  }
+
+  /** Last time's staff walk back in: already at their desks, picking up where they left off. */
+  private async loadStaff() {
+    const save = await this.loadSave();
+    if (!save?.agents.length) {
+      // simulated staff show up on their own; real ones are hired one by one, since each runs Claude Code
+      if (!this.crew.real) [300, 2600, 4900].forEach((ms) => this.time.delayedCall(ms, () => this.hire()));
+      return;
+    }
+    const placed = new Set<string>();
+    for (const saved of save.agents) {
+      const taken = new Set(this.hired.values());
+      const desk = desks.find((d) => d.id === saved.desk && !taken.has(d.id)) ?? desks.find((d) => !taken.has(d.id));
+      if (!desk || !CAST[saved.cast] || this.hired.has(saved.id)) continue;
+      this.hired.set(saved.id, desk.id);
+      this.screens[desk.id].setFrame('desktop');
+      const a = new Agent(this, saved.id, saved.name, `person${saved.cast}`, desk, desk.seat);
+      a.goTo(desk.seat);
+      a.log = [...saved.log];
+      this.agents.set(saved.id, a);
+      placed.add(saved.id);
+    }
+    if (this.hired.size >= Math.min(desks.length, CAST.length)) bus.emit('hire:full');
+    this.shipped = save.shipped;
+    bus.emit('shipped', this.shipped);
+    for (let i = 0; i < Math.min(this.shipped, MAX_PAPERS); i++) this.addPaper();
+    this.crew.restore({ staff: save.crew.staff.filter((p) => placed.has(p.id)), teams: save.crew.teams });
+    this.dirty = true;
+  }
+
+  private async loadSave(): Promise<OfficeSave | null> {
+    try {
+      const memory = this.office()?.memory;
+      const save = memory ? await memory.load() : (JSON.parse(localStorage.getItem(SAVE_KEY) ?? 'null') as OfficeSave | null);
+      return save?.v === 1 ? save : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Remember the office a moment after it changes. */
+  private saveSoon() {
+    if (this.frozen) return;
+    window.clearTimeout(this.saveTimer);
+    this.saveTimer = window.setTimeout(() => this.save(), 1500);
+  }
+
+  private save() {
+    if (this.frozen) return;
+    window.clearTimeout(this.saveTimer);
+    const castOf = (tex: string) => Number(tex.replace('person', ''));
+    const data: OfficeSave = {
+      v: 1,
+      shipped: this.shipped,
+      agents: [...this.agents.values()].map((a) => ({ id: a.id, name: a.name, cast: castOf(a.tex), desk: a.desk.id, log: a.log.slice(-SAVED_LOG) })),
+      crew: this.crew.snapshot(),
+    };
+    const memory = this.office()?.memory;
+    if (memory) memory.save(data);
+    else {
+      try {
+        localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+      } catch {
+        // no storage: this browser session just won't be remembered
+      }
+    }
+  }
+
+  /** Let someone go: they stop, walk to the elevator and leave, and their desk is free again. */
+  private fire(id: string) {
+    const a = this.agents.get(id);
+    if (!a) return;
+    // off the books first, so nothing the crew says on the way out moves them
+    this.agents.delete(id);
+    this.hired.delete(id);
+    if (this.pending.delete(id)) this.pushApprovals();
+    this.crew.fire(id);
+    this.screens[a.desk.id].stop().setFrame('off');
+    if (this.selected === id) this.selected = null;
+    bus.emit('hire:open');
+    a.sprite.disableInteractive();
+    a.activity = 'idle';
+    a.setPose('stand');
+    const at = ELEVATORS.reduce((best, e, i) => (Math.abs(e.x - a.tile.x) < Math.abs(ELEVATORS[best].x - a.tile.x) ? i : best), 0);
+    this.leaving.add(a);
+    a.goTo({ ...ELEVATORS[at], face: 'down' }, () =>
+      this.openElevator(() => {
+        this.leaving.delete(a);
+        a.destroy();
+      }, at),
+    );
+    this.dirty = true;
+    this.save();
   }
 
   /** React to an agent event: send the character to the right part of the office. */
@@ -554,6 +680,11 @@ export class OfficeScene extends Phaser.Scene {
   private ship() {
     this.shipped++;
     bus.emit('shipped', this.shipped);
+    this.addPaper();
+  }
+
+  /** One more finished job on the pile in the outbox. */
+  private addPaper() {
     if (this.papers.length >= MAX_PAPERS) this.papers.shift()?.destroy();
     const n = this.papers.length;
     const tray = n % 3, height = Math.floor(n / 3);
@@ -629,6 +760,7 @@ export class OfficeScene extends Phaser.Scene {
       real: this.crew.real,
     }));
     bus.emit('agents', views);
+    this.saveSoon();
   }
 
   private roleOf(id: string): { team?: string; role?: 'manager' | 'worker' } {

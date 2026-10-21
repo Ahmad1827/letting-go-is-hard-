@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { OWNER } from '../owner';
-import { DEFAULT_SETTINGS, teamId, type Crew, type CrewHooks } from './crew';
+import { DEFAULT_SETTINGS, teamId, type Crew, type CrewHooks, type CrewSave } from './crew';
 import { ideaFor, ordered } from './ideas';
 import type { AgentActivity, AgentStatus, Decision, Idea, Phase, Picture, ProjectInfo, Team } from './types';
 
@@ -99,6 +99,38 @@ export class Sim implements Crew {
   begin(agentId: string, name: string) {
     this.runs.set(agentId, { name, steps: [], i: -1, settled: false, idea: null, seen: new Set(), place: 0, pitched: false, team: null, phase: 'research', since: Date.now(), engine: this.settings.defaultEngine });
     this.research(agentId);
+  }
+
+  snapshot(): CrewSave {
+    return {
+      staff: [...this.runs].map(([id, r]) => ({ id, name: r.name, engine: r.engine, model: this.modelOf(id), usage: { tokens: 0, cost: 0 }, seen: [...r.seen], phase: 'research', idea: null, work: null, desk: null, assignment: null })),
+      teams: [...this.teams.values()],
+    };
+  }
+
+  /** Simulated staff just start their loop again; teams re-form and the manager pitches. */
+  restore(save: CrewSave) {
+    for (const p of save.staff) {
+      this.begin(p.id, p.name);
+      this.models.set(p.id, p.model);
+      p.seen.forEach((t) => this.runs.get(p.id)!.seen.add(t));
+    }
+    for (const t of save.teams) if ([t.manager, ...t.workers].every((id) => this.runs.has(id))) this.createTeam({ name: t.name, manager: t.manager, workers: t.workers });
+  }
+
+  fire(agentId: string) {
+    const run = this.runs.get(agentId);
+    if (!run) return;
+    if (run.team) this.leaveTeam(agentId);
+    this.pushTeams();
+    run.timer?.remove();
+    if (this.line.includes(agentId)) {
+      if (this.line[0] === agentId && run.pitched) this.hooks.pitch(null, null);
+      this.line = this.line.filter((x) => x !== agentId);
+      this.refreshLine();
+    }
+    this.next.delete(agentId);
+    this.runs.delete(agentId);
   }
 
   /** The office reports the agent reached the place for its current step; the step's clock starts now. */
@@ -212,7 +244,8 @@ export class Sim implements Crew {
   }
 
   private standby(agentId: string) {
-    const run = this.runs.get(agentId)!;
+    const run = this.runs.get(agentId);
+    if (!run) return;
     this.setPhase(agentId, 'standby');
     this.start(agentId, [{ activity: 'standby', min: 0, max: 0, detail: `Waiting for ${this.runs.get(run.team?.manager ?? '')?.name ?? 'the manager'}` }]);
   }
@@ -220,7 +253,8 @@ export class Sim implements Crew {
   // ---------------------------------------------------------------- phases
 
   private research(agentId: string, focus?: ProjectInfo) {
-    const run = this.runs.get(agentId)!;
+    const run = this.runs.get(agentId);
+    if (!run) return;
     if (run.team && run.team.manager !== agentId) return this.standby(agentId);
     this.setPhase(agentId, 'research');
     const project = focus ?? this.projects[Math.floor(Math.random() * this.projects.length)];
