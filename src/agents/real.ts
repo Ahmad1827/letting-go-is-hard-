@@ -1,5 +1,5 @@
 import { OWNER } from '../owner';
-import type { Crew, CrewHooks } from './crew';
+import type { AgentUsage, Crew, CrewHooks, UsageWindow } from './crew';
 import { branchFor, ordered } from './ideas';
 import type { AgentActivity, Decision, Idea, ProjectInfo } from './types';
 
@@ -13,7 +13,8 @@ type Msg =
   | { kind: 'init'; model: string; cwd: string }
   | { kind: 'assistant'; model: string; parts: ({ type: 'text'; text: string } | { type: 'tool'; name: string; input: Record<string, unknown> })[] }
   | { kind: 'permission'; requestId: string; tool: string; input: Record<string, unknown>; description: string }
-  | { kind: 'result'; ok: boolean; text: string; cost: number }
+  | { kind: 'result'; ok: boolean; text: string; cost: number; tokens: number }
+  | { kind: 'limits'; status?: string; windows: Record<string, UsageWindow> }
   | { kind: 'exit'; code: number; error?: string };
 
 interface StartConfig { cwd?: string; model?: string; system: string; prompt: string; mode: string }
@@ -48,6 +49,9 @@ interface Staff {
   lastShown: number;
   showTimer?: number;
   breakTimer?: number;
+  usage: AgentUsage;
+  /** The running session's cost so far; Claude Code reports it cumulatively. */
+  sessionCost: number;
 }
 
 /** Characters change place at most this often, so a burst of tool calls doesn't make them run laps. */
@@ -84,7 +88,7 @@ export class RealCrew implements Crew {
   begin(agentId: string, name: string) {
     this.staff.set(agentId, {
       name, phase: 'research', model: '', idea: null, seen: new Set(), alive: false, nudged: false,
-      permissions: [], place: 0, activity: 'idle', lastShown: 0,
+      permissions: [], place: 0, activity: 'idle', lastShown: 0, usage: { tokens: 0, cost: 0 }, sessionCost: 0,
     });
     this.research(agentId);
   }
@@ -162,6 +166,10 @@ export class RealCrew implements Crew {
     return this.staff.get(agentId)?.model ?? '';
   }
 
+  usageOf(agentId: string) {
+    return this.staff.get(agentId)?.usage ?? null;
+  }
+
   interrupt(agentId: string) {
     const s = this.staff.get(agentId);
     if (!s?.alive) return;
@@ -215,6 +223,7 @@ export class RealCrew implements Crew {
   private launch(agentId: string, cfg: StartConfig) {
     const s = this.staff.get(agentId)!;
     s.alive = true;
+    s.sessionCost = 0;
     this.bridge.start(agentId, cfg).catch((e: Error) => {
       s.alive = false;
       this.note(agentId, `Couldn't start Claude Code: ${e.message}`);
@@ -273,7 +282,13 @@ export class RealCrew implements Crew {
         }
         break;
       }
+      case 'limits':
+        this.hooks.limits({ status: msg.status, windows: msg.windows, at: Date.now() });
+        break;
       case 'result':
+        s.usage.tokens += msg.tokens;
+        s.usage.cost += Math.max(0, msg.cost - s.sessionCost);
+        s.sessionCost = msg.cost;
         if (s.phase === 'research') {
           if (s.idea) {
             s.phase = 'queued';

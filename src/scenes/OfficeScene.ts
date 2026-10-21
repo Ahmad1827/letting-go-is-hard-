@@ -80,6 +80,7 @@ export class OfficeScene extends Phaser.Scene {
       note: (id, text) => this.note(id, text),
       pitch: (id, idea) => this.showPitch(id, idea),
       queue: (ids) => bus.emit('queue', ids.map((id) => this.agents.get(id)?.name ?? id)),
+      limits: (l) => bus.emit('usage:limits', l),
     };
     // inside the desktop app the staff are real Claude Code sessions; in a plain browser they're simulated
     const bridge = (window as { office?: { agents?: AgentBridge } }).office?.agents;
@@ -516,6 +517,7 @@ export class OfficeScene extends Phaser.Scene {
       avatar: this.avatar(a.tex),
       log: a.log,
       model: this.crew.modelOf(a.id),
+      usage: this.crew.usageOf(a.id),
       real: this.crew.real,
     }));
     bus.emit('agents', views);

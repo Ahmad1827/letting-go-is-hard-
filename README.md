@@ -47,6 +47,9 @@ permission prompts:
   A project without git history gets edited in place, and every change asks first.
 - Commands that need permission show up under *Commands Waiting for OK*.
 
+The taskbar shows your plan's usage (the 5-hour and weekly windows, as Claude Code reports
+them). Click it for reset times and how many tokens each agent has used this session.
+
 Click an agent to see their full log, switch their model (Fable, Opus, Sonnet, Haiku, or
 Claude Code's default), stop them, or message them. In a plain browser (`npx vite`) the
 agents are simulated instead (`src/agents/sim.ts`).

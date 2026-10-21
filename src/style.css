@@ -252,3 +252,18 @@ button:focus-visible { outline: 1px dotted #000; outline-offset: -5px; }
 #side { overflow-y: auto; }
 .card { max-height: 34vh; overflow-y: auto; }
 #side .grow { min-height: 300px; }
+
+/* usage meter in the taskbar, and its window */
+.tray.usage { display: flex; align-items: center; gap: 4px; min-width: 0; font: inherit; padding: 2px 8px; box-shadow: none; }
+.tray-label { margin-left: 4px; }
+.tray-pct { min-width: 30px; text-align: right; }
+.meter { display: inline-block; width: 48px; height: 10px; background: #fff; border: 1px solid; border-color: var(--shadow) var(--light) var(--light) var(--shadow); }
+.meter span { display: block; height: 100%; }
+#usage-pop { position: fixed; right: 8px; bottom: 36px; width: 420px; max-width: calc(100vw - 16px); z-index: 10; }
+#usage-pop .body { display: flex; flex-direction: column; gap: 6px; }
+#usage-pop .ctrls i { cursor: pointer; }
+.usage-table { border-collapse: collapse; width: 100%; background: #fff; border: 2px solid; border-color: var(--shadow) var(--light) var(--light) var(--shadow); }
+.usage-table td, .usage-table th { padding: 2px 6px; text-align: left; white-space: nowrap; }
+.usage-table th { background: var(--face); font-weight: normal; }
+.usage-table .total td { font-weight: bold; border-top: 1px solid var(--shadow); }
+.usage-table .meter { width: 90px; }

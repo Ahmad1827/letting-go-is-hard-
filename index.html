@@ -56,8 +56,14 @@
       <button class="start"><span class="flag"></span><b>Start</b></button>
       <span class="task">OFFICE.EXE</span>
       <span class="spacer"></span>
+      <button id="usage" class="tray usage" title="Claude Code usage">Usage</button>
       <span id="clock" class="tray"></span>
     </footer>
+
+    <section id="usage-pop" class="win" hidden>
+      <div class="title"><span>Usage</span><span class="ctrls"><i id="usage-close">×</i></span></div>
+      <div class="body" id="usage-body"></div>
+    </section>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

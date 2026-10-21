@@ -59,6 +59,10 @@ export class Sim implements Crew {
     return this.models.get(agentId) ?? '';
   }
 
+  usageOf() {
+    return null;
+  }
+
   interrupt() {}
 
   begin(agentId: string, name: string) {

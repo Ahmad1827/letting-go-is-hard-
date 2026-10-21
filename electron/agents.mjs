@@ -36,7 +36,14 @@ function slim(m) {
   }
   if (m.type === 'control_request' && m.request?.subtype === 'can_use_tool')
     return { kind: 'permission', requestId: m.request_id, tool: m.request.tool_name, input: m.request.input, description: m.request.description ?? '' };
-  if (m.type === 'result') return { kind: 'result', ok: m.subtype === 'success', text: m.result ?? '', cost: m.total_cost_usd ?? 0 };
+  if (m.type === 'result') {
+    const u = m.usage ?? {};
+    const tokens = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.output_tokens ?? 0);
+    // cost is cumulative for the session, tokens are for this turn only
+    return { kind: 'result', ok: m.subtype === 'success', text: m.result ?? '', cost: m.total_cost_usd ?? 0, tokens };
+  }
+  // the plan's usage windows (5-hour, weekly), as fractions of the limit
+  if (m.type === 'rate_limit_event') return { kind: 'limits', status: m.rate_limit_info?.status, windows: m.rate_limit_info?.unifiedWindows ?? {} };
   return null;
 }
 

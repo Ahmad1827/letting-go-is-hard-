@@ -1,5 +1,12 @@
 import type { AgentEvent, Decision, Idea, ProjectInfo } from './types';
 
+/** One of the plan's usage windows, as Claude Code reports it. */
+export interface UsageWindow { utilization: number; resetsAt: number }
+/** The plan's usage windows (e.g. five_hour, seven_day) and when they were last reported. */
+export interface Limits { status?: string; windows: Record<string, UsageWindow>; at: number }
+/** What one agent has used so far: tokens, and what that would cost at API prices. */
+export interface AgentUsage { tokens: number; cost: number }
+
 /** What the office needs to hear from whoever runs the agents. */
 export interface CrewHooks {
   emit(ev: AgentEvent): void;
@@ -8,6 +15,8 @@ export interface CrewHooks {
   pitch(agentId: string | null, idea: Idea | null): void;
   /** Everyone waiting to pitch, front of the line first. */
   queue(agentIds: string[]): void;
+  /** Fresh numbers for the plan's usage windows. */
+  limits(l: Limits): void;
 }
 
 /** The staff, simulated or real. The office drives both the same way. */
@@ -26,6 +35,8 @@ export interface Crew {
   say(agentId: string, text: string): void;
   setModel(agentId: string, model: string): void;
   modelOf(agentId: string): string;
+  /** Null for simulated agents, which use nothing. */
+  usageOf(agentId: string): AgentUsage | null;
   /** Stop whatever the agent is doing right now. */
   interrupt(agentId: string): void;
 }
