@@ -97,14 +97,14 @@ const PITCH_FORMAT = `\`\`\`pitch
 const COMMIT_RULES = 'commit with clear messages using the repository\'s configured git user, and never add Co-Authored-By lines or mention Claude or AI in commits; never push';
 
 const RESEARCH_PROMPT = (name: string) => `You are ${name}, a software engineer in ${OWNER}'s office. The current folder holds ${OWNER}'s projects, one per sub-folder (ignore hidden folders).
-Right now you are researching, not building: do not create, edit, move or delete anything, and only run read-only commands.
+Right now you are researching, not building: do not create, edit, move or delete anything, and only run read-only commands. Look around with Glob, Grep and Read.
 Pick a project, read enough of it to understand it (a handful of files is plenty), and come up with ONE concrete improvement you could build in an afternoon that ${OWNER} would actually want.
 End your reply with exactly one block like this:
 ${PITCH_FORMAT}
 ${OWNER} may also message you directly. Answer briefly and stay in character.`;
 
 const MANAGER_RESEARCH_PROMPT = (name: string, workers: string[]) => `You are ${name}, a manager in ${OWNER}'s office leading a team: ${workers.join(', ')}. The current folder holds ${OWNER}'s projects, one per sub-folder (ignore hidden folders).
-Right now you are researching, not building: do not create, edit, move or delete anything, and only run read-only commands.
+Right now you are researching, not building: do not create, edit, move or delete anything, and only run read-only commands. Look around with Glob, Grep and Read.
 Pick a project, read enough to understand it, and come up with ONE improvement that ${OWNER} would want and that is big enough for your team of ${workers.length + 1}: it should split into independent pieces people can build in parallel in an afternoon.
 End your reply with exactly one block like this:
 ${PITCH_FORMAT}
@@ -214,7 +214,12 @@ export class RealCrew implements Crew {
       this.setPhase(s, 'work');
     }
     if (s.alive) this.bridge.send(agentId, message);
-    else if (s.role === 'worker' && s.desk) this.launch(agentId, { cwd: s.desk.cwd, system: this.workerSystem(s), prompt: message, mode: this.workMode(s.desk.mode) });
+    else if (s.role === 'worker' && !s.desk) {
+      // workers take their tasks from the manager: pass it up
+      const manager = this.teamOf(s)?.manager;
+      this.note(agentId, `${s.name} takes tasks from ${this.nameOf(manager ?? '')}; passed it on`);
+      if (manager) this.say(manager, `(for ${s.name}) ${text}`, pictures);
+    } else if (s.role === 'worker' && s.desk) this.launch(agentId, { cwd: s.desk.cwd, system: this.workerSystem(s), prompt: message, mode: this.workMode(s.desk.mode) });
     else this.research(agentId, `${OWNER} says: ${text}`, pictures);
   }
 
@@ -577,7 +582,9 @@ export class RealCrew implements Crew {
         break;
       case 'permission': {
         const text = permissionText(msg.tool, msg.input, this.root());
-        if (s.phase === 'research' || s.phase === 'queued') {
+        if ((s.phase === 'research' || s.phase === 'queued') && readOnlyCommand(msg.tool, msg.input)) {
+          this.bridge.answer(agentId, msg.requestId, true, msg.input);
+        } else if (s.phase === 'research' || s.phase === 'queued') {
           this.bridge.answer(agentId, msg.requestId, false, msg.input, `You're only researching right now. Don't change anything; pitch the idea to ${OWNER} first.`);
           this.note(agentId, `(tried to ${text} while researching; told no)`);
         } else if (this.autoApprove) {
@@ -585,7 +592,7 @@ export class RealCrew implements Crew {
           this.note(agentId, `Auto-approved: ${text}`);
         } else if (this.background) {
           // nobody to ask: fine inside their own branch folder, not anywhere else
-          const isolated = !!s.workCwd?.includes('/.letting-go/worktrees/');
+          const isolated = !!s.workCwd?.replace(/\\/g, '/').includes('/.letting-go/worktrees/');
           this.bridge.answer(agentId, msg.requestId, isolated, msg.input, isolated ? undefined : `${OWNER} is away. Skip anything that needs approval and mention it in your summary.`);
           this.note(agentId, `${isolated ? 'Allowed (own branch, while away)' : 'Skipped (needs approval, Ahmad is away)'}: ${text}`);
         } else {
@@ -692,7 +699,7 @@ export class RealCrew implements Crew {
 
   private root() {
     const p = this.projects[0]?.path;
-    return p ? p.slice(0, p.lastIndexOf('/')) : '';
+    return p ? p.slice(0, Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))) : '';
   }
 
   // ---------------------------------------------------------------- the office
@@ -767,13 +774,27 @@ function jobBrief(idea: Idea) {
 
 function rel(p: unknown, root: string) {
   const s = String(p ?? '');
-  return root && s.startsWith(root + '/') ? s.slice(root.length + 1).replace(/^\.letting-go\/worktrees\//, '') : s;
+  return root && (s.startsWith(root + '/') || s.startsWith(root + '\\')) ? s.slice(root.length + 1).replace(/^\.letting-go[\\/]worktrees[\\/]/, '') : s;
+}
+
+/**
+ * A shell command that only looks around (ls, cat, git log...). Claude Code
+ * already allows these itself on most systems, but asks on some (Windows).
+ */
+function readOnlyCommand(tool: string, input: Record<string, unknown>) {
+  if (tool !== 'Bash') return false;
+  const cmd = String(input.command ?? '').replace(/\d?>\s*\/dev\/null/g, '');
+  if (/[>`]|\$\(|-exec|-delete|-fprint|--output/.test(cmd)) return false;
+  const LOOK = /^(ls|cat|head|tail|wc|pwd|cd|echo|find|tree|file|stat|du|grep|rg|uniq|for|do|done|git (log|status|show|diff|ls-files|rev-parse|remote -v))(\s|$)/;
+  return cmd.split(/&&|\|\||[;|\n]/).every((part) => !part.trim() || LOOK.test(part.trim()));
 }
 
 /** Where a tool call sends the character, and a log line for it. */
 function describe(tool: string, input: Record<string, unknown>, root: string): [AgentActivity, string] {
   switch (tool) {
     case 'Read': return ['reading', `Read ${rel(input.file_path, root)}`];
+    case 'Glob': return ['reading', `Look for ${input.pattern}`];
+    case 'Grep': return ['reading', `Search for "${short(String(input.pattern ?? ''), 60)}"`];
     case 'Edit': return ['writing', `Edit ${rel(input.file_path, root)}`];
     case 'Write': return ['writing', `Write ${rel(input.file_path, root)}`];
     case 'Bash': return ['running', `$ ${short(String(input.command ?? ''))}`];

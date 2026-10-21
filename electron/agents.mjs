@@ -5,21 +5,53 @@
 // on stdout. Permission prompts come back as control requests, which the
 // office answers (approve/deny) instead of a terminal.
 import { execFile, spawn } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import { existsSync, promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import { engine, settings } from './settings.mjs';
 
-const TOOLS = 'Bash,Read,Edit,Write,WebSearch,WebFetch';
+const TOOLS = 'Bash,Read,Glob,Grep,Edit,Write,WebSearch,WebFetch';
 /** Approved work happens in git worktrees here, so a project's own checkout is never touched. */
 const worktrees = () => path.join(settings().projectsRoot, '.letting-go', 'worktrees');
 
 const procs = new Map();
 
+// Windows git refuses repos it doesn't own, like ones inside WSL (\\wsl.localhost\...)
+const GIT_ENV = process.platform === 'win32' ? { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'safe.directory', GIT_CONFIG_VALUE_0: '*' } : {};
+
 function git(cwd, args) {
   return new Promise((resolve, reject) => {
-    execFile('git', args, { cwd, timeout: 20000 }, (err, stdout, stderr) => (err ? reject(new Error(stderr.trim() || err.message)) : resolve(stdout.trim())));
+    execFile('git', args, { cwd, timeout: 20000, env: { ...process.env, ...GIT_ENV } }, (err, stdout, stderr) => (err ? reject(new Error(stderr.trim() || err.message)) : resolve(stdout.trim())));
   });
+}
+
+/**
+ * Find the engine's program. A bare name is looked up on PATH, then where
+ * Claude Code's installers put it, since apps started from the desktop don't
+ * always see the PATH a terminal does. npm's claude.cmd can't be spawned
+ * directly, so its cli.js runs on Electron's own Node instead.
+ */
+function resolveCommand(command) {
+  if (path.isAbsolute(command)) return { file: command, pre: [], env: {} };
+  const win = process.platform === 'win32';
+  const exts = win ? ['.exe', '.cmd', ''] : [''];
+  const dirs = [
+    ...(process.env.PATH ?? '').split(path.delimiter).filter(Boolean),
+    path.join(os.homedir(), '.local', 'bin'),
+    path.join(os.homedir(), '.claude', 'local'),
+    ...(win && process.env.APPDATA ? [path.join(process.env.APPDATA, 'npm')] : []),
+  ];
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      const file = path.join(dir, command + ext);
+      if (!existsSync(file)) continue;
+      if (ext !== '.cmd') return { file, pre: [], env: {} };
+      const cli = path.join(dir, 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js');
+      if (existsSync(cli)) return { file: process.execPath, pre: [cli], env: { ELECTRON_RUN_AS_NODE: '1' } };
+    }
+  }
+  return { file: command, pre: [], env: {} };
 }
 
 /** Keep only what the office needs from each stream-json event. */
@@ -60,7 +92,14 @@ export function setupAgents(ipcMain, getWindow) {
       '--append-system-prompt', system,
     ];
     if (model) args.push('--model', model);
-    const p = spawn(eng.command, args, { cwd: cwd || settings().projectsRoot, env: { ...process.env, ...eng.env } });
+    const dir = cwd || settings().projectsRoot;
+    // a missing folder makes spawn fail with a misleading "claude ENOENT"
+    if (!existsSync(dir)) {
+      queueMicrotask(() => emit(id, { kind: 'exit', code: -1, error: `The folder ${dir} doesn't exist. Pick your projects folder in Start > Settings.` }));
+      return;
+    }
+    const cmd = resolveCommand(eng.command);
+    const p = spawn(cmd.file, [...cmd.pre, ...args], { cwd: dir, env: { ...process.env, ...GIT_ENV, ...cmd.env, ...eng.env }, windowsHide: true });
     const entry = { p, closed: false };
     procs.set(id, entry);
     readline.createInterface({ input: p.stdout }).on('line', (line) => {

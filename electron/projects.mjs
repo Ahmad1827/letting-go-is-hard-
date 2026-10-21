@@ -16,7 +16,8 @@ const MAX_FILES = 1500;
 
 function git(cwd, args) {
   return new Promise((resolve) => {
-    execFile('git', args, { cwd, timeout: 3000 }, (err, stdout) => resolve(err ? '' : stdout.trim()));
+    // safe.directory: Windows git otherwise refuses repos inside WSL
+    execFile('git', ['-c', 'safe.directory=*', ...args], { cwd, timeout: 3000 }, (err, stdout) => resolve(err ? '' : stdout.trim()));
   });
 }
 

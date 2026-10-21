@@ -1,7 +1,7 @@
 // The owner's settings, saved as JSON in the app's user-data folder.
 import { app } from 'electron';
 import { execFile } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import { existsSync, promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -40,11 +40,35 @@ const file = () => path.join(app.getPath('userData'), 'settings.json');
 
 let current = structuredClone(DEFAULTS);
 
+const run = (cmd, args, encoding = 'utf8') =>
+  new Promise((resolve) => execFile(cmd, args, { encoding, timeout: 8000, windowsHide: true }, (err, out) => resolve(err ? '' : out)));
+
+/**
+ * On Windows with no projects folder yet, look for ~/proiecte inside WSL
+ * (\\wsl.localhost\<distro>\home\<user>\proiecte), where it usually lives.
+ */
+async function findWslProjects() {
+  if (process.platform !== 'win32') return null;
+  // wsl.exe lists distros in UTF-16
+  const distros = (await run('wsl.exe', ['-l', '-q'], 'utf16le')).split(/\r?\n/).map((d) => d.replace(/\0/g, '').trim()).filter((d) => d && !d.startsWith('docker-desktop'));
+  for (const d of distros) {
+    const home = (await run('wsl.exe', ['-d', d, '-e', 'sh', '-c', 'echo $HOME'])).trim();
+    if (!home.startsWith('/')) continue;
+    const dir = `\\\\wsl.localhost\\${d}${home.replace(/\//g, '\\')}\\proiecte`;
+    if (existsSync(dir)) return dir;
+  }
+  return null;
+}
+
 export async function loadSettings() {
+  let saved = {};
   try {
-    current = { ...structuredClone(DEFAULTS), ...JSON.parse(await fs.readFile(file(), 'utf8')) };
-  } catch {
-    current = structuredClone(DEFAULTS);
+    saved = JSON.parse(await fs.readFile(file(), 'utf8'));
+  } catch {}
+  current = { ...structuredClone(DEFAULTS), ...saved };
+  if (!existsSync(current.projectsRoot)) {
+    const wsl = await findWslProjects();
+    if (wsl) current.projectsRoot = wsl;
   }
   if (!current.engines.some((e) => e.id === BUILT_IN.id)) current.engines.unshift(BUILT_IN);
   return settings();
