@@ -1,10 +1,11 @@
 import Phaser from 'phaser';
 import { findPath, randomNear, TILE, type Desk, type Facing, type Spot, type Tile } from '../world/map';
+import { FEET_Y, FRAME_H } from '../art/people';
 import type { AgentActivity } from './types';
 
-const SPEED = 42; // px per second
-const centerX = (t: Tile) => t.x * TILE + 8;
-const feetY = (t: Tile) => t.y * TILE + 12;
+const SPEED = 120; // px per second
+const centerX = (t: Tile) => t.x * TILE + TILE / 2;
+const feetY = (t: Tile) => t.y * TILE + 36;
 const FACES: Facing[] = ['down', 'up', 'left', 'right'];
 
 export type Pose = 'stand' | 'type' | 'raise';
@@ -38,7 +39,7 @@ export class Agent {
     start: Tile,
   ) {
     this.tile = { ...start };
-    this.sprite = scene.add.sprite(centerX(start), feetY(start), tex, 'up0').setOrigin(0.5, 23 / 24);
+    this.sprite = scene.add.sprite(centerX(start), feetY(start), tex, 'up0').setOrigin(0.5, FEET_Y / FRAME_H);
     this.sprite.setInteractive({ useHandCursor: true }).setData('agent', id);
     this.bubble = scene.add.sprite(0, 0, 'bubble', 'idle').setOrigin(0.5, 1).setDepth(10000).setVisible(false);
   }
@@ -108,7 +109,7 @@ export class Agent {
     this.bubble
       .setFrame(frame)
       .setVisible(true)
-      .setPosition(Math.round(s.x), Math.round(s.y) - 22 - (Math.floor(time / 400) % 2));
+      .setPosition(Math.round(s.x), Math.round(s.y) - 92 - (Math.floor(time / 400) % 2) * 2);
   }
 
   destroy() {

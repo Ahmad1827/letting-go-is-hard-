@@ -2,28 +2,36 @@ import Phaser from 'phaser';
 import { bus } from '../bus';
 import { buildPeople, CAST } from '../art/people';
 import { buildProps } from '../art/props';
+import { buildRooms } from '../art/rooms';
 import { buildBand, currentPhase } from '../art/skyline';
 import { Agent } from '../agents/Agent';
 import { Sim } from '../agents/sim';
 import type { AgentEvent } from '../agents/types';
 import type { AgentView, ApprovalView } from '../ui/hud';
 import {
-  BOSS_SCREEN, COLS, ELEVATOR, OUTBOX, ROWS, TILE, WIDTH, desks, props, randomNear, spots, walkable,
+  BAND_ROWS, BOSS_MONITOR, COLS, ELEVATORS, HEIGHT, OUTBOX, ROWS, TILE, WIDTH, desks, props, randomNear, rooms, spots, walkable, walls,
   type Spot, type Tile,
 } from '../world/map';
 
 const MAX_PAPERS = 12;
+/** Width of one elevator door leaf. */
+const HALF = TILE / 2;
+/** Height of a wall's top edge; the rest of the tile is its face. */
+const CAP = 12;
+/** Zoom steps; above 1x they stay whole numbers so every pixel is the same size. */
+const ZOOMS = [0.5, 0.75, 1, 2, 3];
 
 export class OfficeScene extends Phaser.Scene {
   private agents = new Map<string, Agent>();
   /** agent id -> desk id, including agents still in the elevator */
   private hired = new Map<string, number>();
-  private arrivals: (() => void)[] = [];
+  private arrivals: { at: number; then: () => void }[] = [];
+  private nextElevator = 0;
   private sim!: Sim;
   private screens: Phaser.GameObjects.Sprite[] = [];
   private bossScreen!: Phaser.GameObjects.Sprite;
   private racks: Phaser.GameObjects.Sprite[] = [];
-  private doors!: [Phaser.GameObjects.Image, Phaser.GameObjects.Image];
+  private doors: [Phaser.GameObjects.Image, Phaser.GameObjects.Image][] = [];
   private ring!: Phaser.GameObjects.Image;
   /** Which spot each agent is holding, so two agents don't stand in the same place. */
   private claims = new Map<string, string>();
@@ -34,6 +42,8 @@ export class OfficeScene extends Phaser.Scene {
   private dirty = true;
   private lastPush = 0;
   private avatars = new Map<string, string>();
+  private keys!: Record<'up' | 'down' | 'left' | 'right' | 'w' | 'a' | 's' | 'd', Phaser.Input.Keyboard.Key>;
+  private drag: { x: number; y: number; sx: number; sy: number } | null = null;
 
   constructor() {
     super('office');
@@ -42,28 +52,34 @@ export class OfficeScene extends Phaser.Scene {
   create() {
     buildPeople(this);
     buildProps(this);
+    buildRooms(this);
     buildBand(this, WIDTH, currentPhase());
     this.drawRoom();
 
     for (const p of props) {
-      const s = this.add.sprite(p.x, p.y, p.key).setOrigin(0.5, 1).setDepth(p.y);
+      const s = this.add.sprite(p.x, p.y, p.key).setOrigin(0.5, 1).setDepth(p.depth ?? p.y);
       if (p.anim) {
         s.play({ key: p.anim, startFrame: Math.floor(Math.random() * 3) });
         this.racks.push(s);
       }
     }
-    this.screens = desks.map((d) => this.add.sprite(d.screen.x, d.screen.y, 'screen', 'off').setOrigin(0).setDepth(d.screen.y + 26.1));
-    this.bossScreen = this.add.sprite(BOSS_SCREEN.x, BOSS_SCREEN.y, 'screen', 'desktop').setOrigin(0).setDepth(BOSS_SCREEN.y + 28.1);
+    this.screens = desks.map((d) => this.add.sprite(d.screen.x, d.screen.y, 'screen', 'off').setOrigin(0).setDepth(d.screen.depth));
+    this.bossScreen = this.add.sprite(BOSS_MONITOR.x, BOSS_MONITOR.y, 'screen', 'desktop').setOrigin(0).setDepth(BOSS_MONITOR.depth);
     this.ring = this.add.image(0, 0, 'ring').setVisible(false);
     this.tweens.add({ targets: this.ring, alpha: 0.35, duration: 500, yoyo: true, repeat: -1 });
 
     this.sim = new Sim(this.time, (ev) => this.apply(ev), (id, text) => this.note(id, text));
+    this.setupCamera();
 
     this.input.on('gameobjectdown', (_p: Phaser.Input.Pointer, obj: Phaser.GameObjects.GameObject) => {
       const id = obj.getData('agent') as string | undefined;
       if (id) bus.emit('select', id);
     });
     bus.on('select', (id: string) => (this.selected = id));
+    bus.on('focus', (id: string) => {
+      const a = this.agents.get(id);
+      if (a) this.cameras.main.pan(a.sprite.x, a.sprite.y - 40, 500, 'Sine.easeInOut');
+    });
     bus.on('hire', () => this.hire());
     bus.on('approval:resolve', ({ id, ok }: { id: string; ok: boolean }) => this.resolve(id, ok));
     bus.on('autoapprove', (on: boolean) => {
@@ -81,64 +97,192 @@ export class OfficeScene extends Phaser.Scene {
     const sel = this.selected && this.agents.get(this.selected);
     this.ring.setVisible(!!sel);
     if (sel) this.ring.setPosition(Math.round(sel.sprite.x), Math.round(sel.sprite.y)).setDepth(sel.sprite.depth - 0.5);
+    this.panWithKeys(delta);
     if (this.dirty && time - this.lastPush > 250) this.pushState(time);
+  }
+
+  // ---------------------------------------------------------------- camera
+
+  private setupCamera() {
+    const cam = this.cameras.main;
+    cam.setBounds(0, 0, WIDTH, HEIGHT).setRoundPixels(true);
+    cam.setZoom(1).centerOn(19.5 * TILE, 17 * TILE);
+
+    this.input.on('wheel', (p: Phaser.Input.Pointer, _o: unknown, _dx: number, dy: number) => this.zoomStep(dy > 0 ? -1 : 1, p.x, p.y));
+
+    // drag anywhere to pan; a short press still counts as a click
+    this.input.on('pointerdown', (p: Phaser.Input.Pointer) => (this.drag = { x: p.x, y: p.y, sx: cam.scrollX, sy: cam.scrollY }));
+    this.input.on('pointerup', () => (this.drag = null));
+    this.input.on('pointerupoutside', () => (this.drag = null));
+    this.input.on('pointermove', (p: Phaser.Input.Pointer) => {
+      if (!this.drag || !p.isDown) return;
+      cam.setScroll(this.drag.sx - (p.x - this.drag.x) / cam.zoom, this.drag.sy - (p.y - this.drag.y) / cam.zoom);
+    });
+
+    const kb = this.input.keyboard!;
+    this.keys = {
+      up: kb.addKey('UP', false), down: kb.addKey('DOWN', false), left: kb.addKey('LEFT', false), right: kb.addKey('RIGHT', false),
+      w: kb.addKey('W', false), a: kb.addKey('A', false), s: kb.addKey('S', false), d: kb.addKey('D', false),
+    };
+    kb.on('keydown', (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement) return;
+      if (e.key === '+' || e.key === '=') this.zoomStep(1);
+      if (e.key === '-' || e.key === '_') this.zoomStep(-1);
+      if (e.key === '0' || e.key === 'f') this.zoomTo(this.fitZoom());
+    });
+    bus.on('zoom', (how: 'in' | 'out' | 'fit') => (how === 'fit' ? this.zoomTo(this.fitZoom()) : this.zoomStep(how === 'in' ? 1 : -1)));
+    this.scale.on('resize', () => this.emitZoom());
+    this.emitZoom();
+  }
+
+  private fitZoom() {
+    const cam = this.cameras.main;
+    return Math.min(cam.width / WIDTH, cam.height / HEIGHT);
+  }
+
+  /** Step through the zoom levels, keeping the point under the cursor in place. */
+  private zoomStep(dir: 1 | -1, px?: number, py?: number) {
+    const cam = this.cameras.main;
+    const levels = [...new Set([this.fitZoom(), ...ZOOMS])].sort((a, b) => a - b).filter((z) => z >= this.fitZoom() - 1e-6);
+    const z = cam.zoom;
+    const next = dir > 0 ? levels.find((l) => l > z + 1e-6) : [...levels].reverse().find((l) => l < z - 1e-6);
+    if (next !== undefined) this.zoomTo(next, px, py);
+  }
+
+  private zoomTo(zoom: number, px = this.cameras.main.width / 2, py = this.cameras.main.height / 2) {
+    const cam = this.cameras.main;
+    const w = cam.width, h = cam.height;
+    const wx = cam.scrollX + w / 2 + (px - w / 2) / cam.zoom;
+    const wy = cam.scrollY + h / 2 + (py - h / 2) / cam.zoom;
+    cam.setZoom(zoom);
+    cam.setScroll(wx - w / 2 - (px - w / 2) / zoom, wy - h / 2 - (py - h / 2) / zoom);
+    this.emitZoom();
+  }
+
+  private emitZoom() {
+    bus.emit('zoom:level', this.cameras.main.zoom);
+  }
+
+  private panWithKeys(delta: number) {
+    const k = this.keys, cam = this.cameras.main;
+    const dx = (k.right.isDown || k.d.isDown ? 1 : 0) - (k.left.isDown || k.a.isDown ? 1 : 0);
+    const dy = (k.down.isDown || k.s.isDown ? 1 : 0) - (k.up.isDown || k.w.isDown ? 1 : 0);
+    if (!dx && !dy) return;
+    const step = (700 * delta) / 1000 / cam.zoom;
+    cam.setScroll(cam.scrollX + dx * step, cam.scrollY + dy * step);
   }
 
   // ---------------------------------------------------------------- room
 
   private drawRoom() {
-    this.add.tileSprite(TILE, 4 * TILE, (COLS - 2) * TILE, 12 * TILE, 'carpet').setOrigin(0).setDepth(-10);
-    this.add.tileSprite(TILE, 9 * TILE, 5 * TILE, 7 * TILE, 'lino').setOrigin(0).setDepth(-9);
+    const T = TILE;
+    this.add.tileSprite(0, BAND_ROWS * T, WIDTH, HEIGHT - BAND_ROWS * T, 'carpet').setOrigin(0).setDepth(-11);
+    for (const room of rooms) {
+      const w = (room.x1 - room.x0 + 1) * T, h = (room.y1 - room.y0 + 1) * T;
+      this.add.tileSprite(room.x0 * T, room.y0 * T, w, h, room.floor).setOrigin(0).setDepth(-10);
+    }
     this.add.image(0, 0, 'band').setOrigin(0).setDepth(-5);
 
-    const g = this.add.graphics().setDepth(-9);
-    // corner-office rug
-    g.fillStyle(0xc9a227).fillRect(22 * TILE + 3, 11 * TILE + 3, 7 * TILE - 6, 5 * TILE - 6);
-    g.fillStyle(0x5c1f2a).fillRect(22 * TILE + 4, 11 * TILE + 4, 7 * TILE - 8, 5 * TILE - 8);
-    g.fillStyle(0x6e2633).fillRect(22 * TILE + 8, 11 * TILE + 8, 7 * TILE - 16, 5 * TILE - 16);
+    // soft shadows where floors meet walls
+    const sh = this.add.graphics().setDepth(-9);
+    for (let y = BAND_ROWS; y < ROWS; y++)
+      for (let x = 0; x < COLS; x++) {
+        if (walls[y][x]) continue;
+        if (y === BAND_ROWS || walls[y - 1][x]) { sh.fillStyle(0x000000, 0.22).fillRect(x * T, y * T, T, 4); sh.fillStyle(0x000000, 0.1).fillRect(x * T, y * T + 4, T, 6); }
+        if (x > 0 && walls[y][x - 1]) sh.fillStyle(0x000000, 0.14).fillRect(x * T, y * T, 5, T);
+        if (x < COLS - 1 && walls[y][x + 1]) sh.fillStyle(0x000000, 0.08).fillRect(x * T + T - 3, y * T, 3, T);
+      }
+    // brass thresholds in the doorways: open tiles that belong to no room
+    const th = this.add.graphics().setDepth(-9);
+    const inRoom = (x: number, y: number) => rooms.some((r) => x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1);
+    for (let y = BAND_ROWS; y < ROWS - 1; y++)
+      for (let x = 1; x < COLS - 1; x++)
+        if (!walls[y][x] && !inRoom(x, y)) th.fillStyle(0xb8a060).fillRect(x * T, y * T + 22, T, 3).fillStyle(0xe0c880).fillRect(x * T, y * T + 22, T, 1);
 
-    const w = this.add.graphics().setDepth(-4);
-    const H = ROWS * TILE;
-    w.fillStyle(0xbfb393).fillRect(0, 4 * TILE, TILE, H).fillRect(WIDTH - TILE, 4 * TILE, TILE, H);
-    w.fillStyle(0xa89a78).fillRect(TILE - 1, 4 * TILE, 1, H).fillRect(WIDTH - TILE, 4 * TILE, 1, H);
+    for (let y = BAND_ROWS; y < ROWS; y++)
+      for (let x = 0; x < COLS; x++) if (walls[y][x]) this.drawWall(x, y);
 
-    const bottom = this.add.graphics().setDepth(H - 2);
-    bottom.fillStyle(0xbfb393).fillRect(0, H - TILE, WIDTH, TILE);
-    bottom.fillStyle(0xe0d6bb).fillRect(0, H - TILE, WIDTH, 1);
-    const ex = ELEVATOR.x * TILE;
-    bottom.fillStyle(0x2a2622).fillRect(ex, H - TILE, TILE, TILE);
-    bottom.fillStyle(0x8a7a50).fillRect(ex - 2, H - TILE, 2, TILE).fillRect(ex + TILE, H - TILE, 2, TILE);
-    bottom.fillStyle(0xffd060).fillRect(ex + TILE + 4, H - TILE + 4, 2, 2);
+    for (const e of ELEVATORS) this.drawElevator(e);
+  }
 
-    const mask = this.make.graphics({}, false).fillRect(ex, H - TILE, TILE, TILE).createGeometryMask();
-    this.doors = [
-      this.add.image(ex, H - TILE, 'door').setOrigin(0).setDepth(H + 1).setMask(mask),
-      this.add.image(ex + 8, H - TILE, 'door').setOrigin(0).setDepth(H + 1).setMask(mask).setFlipX(true),
-    ];
+  /** A wall tile seen from above and slightly south: a cap, plus a face if nothing continues below it. */
+  private drawWall(x: number, y: number) {
+    const T = TILE, px = x * T, py = y * T;
+    const g = this.add.graphics().setDepth((y + 1) * T);
+    const below = y + 1 < ROWS && walls[y + 1][x];
+    const outer = x === 0 || x === COLS - 1;
+    if (below) {
+      // a wall running north-south: only its top is visible
+      const w = outer ? T : 18, ox = outer ? 0 : (T - w) / 2;
+      g.fillStyle(0xe4dbc2).fillRect(px + ox, py, w, T);
+      g.fillStyle(0xf4eedc).fillRect(px + ox, py, 2, T);
+      g.fillStyle(0xa89a78).fillRect(px + ox + w - 2, py, 2, T);
+      if (outer) { g.fillStyle(0xcfc4a4).fillRect(px + 6, py, T - 12, T); g.fillStyle(0xbfb393).fillRect(px + 10, py, T - 20, T); }
+      return;
+    }
+    // an east-west wall: top edge and the painted face
+    const left = x > 0 && walls[y][x - 1], right = x < COLS - 1 && walls[y][x + 1];
+    g.fillStyle(0xe4dbc2).fillRect(px, py, T, CAP);
+    g.fillStyle(0xf4eedc).fillRect(px, py, T, 2);
+    g.fillStyle(0xa89a78).fillRect(px, py + CAP - 2, T, 2);
+    g.fillStyle(0xcfc4a4).fillRect(px, py + CAP, T, T - CAP);
+    g.fillStyle(0xd8ceb0).fillRect(px, py + CAP, T, 4);
+    for (let i = 0; i < 3; i++) g.fillStyle(0xc6bb9a).fillRect(px + 7 + i * 16, py + CAP + 10 + ((x + i) % 3) * 7, 1, 1);
+    g.fillStyle(0x6e6553).fillRect(px, py + T - 6, T, 6);
+    g.fillStyle(0x8a8068).fillRect(px, py + T - 6, T, 1);
+    // door frames where the wall ends at an opening
+    if (!left && x > 0) { g.fillStyle(0x8a6a42).fillRect(px, py + CAP, 4, T - CAP); g.fillStyle(0xaa8a5a).fillRect(px, py + CAP, 1, T - CAP); }
+    if (!right && x < COLS - 1) { g.fillStyle(0x8a6a42).fillRect(px + T - 4, py + CAP, 4, T - CAP); g.fillStyle(0x5a4222).fillRect(px + T - 1, py + CAP, 1, T - CAP); }
+  }
+
+  private drawElevator(e: Tile) {
+    const T = TILE, ex = e.x * T, top = e.y * T + CAP, H = T - CAP;
+    const g = this.add.graphics().setDepth((e.y + 1) * T - 1);
+    g.fillStyle(0xe4dbc2).fillRect(ex, e.y * T, T, CAP);
+    g.fillStyle(0x2a2622).fillRect(ex, top, T, H);
+    g.fillStyle(0x6a5a30).fillRect(ex - 6, top - 2, T + 12, 3);
+    g.fillStyle(0xc9a227).fillRect(ex - 5, top - 2, T + 10, 2).fillRect(ex - 5, top, 4, H).fillRect(ex + T + 1, top, 4, H);
+    g.fillStyle(0xf0d060).fillRect(ex - 5, top, 1, H).fillRect(ex + T + 1, top, 1, H);
+    // up/down call buttons
+    g.fillStyle(0x8a7a50).fillRect(ex + T + 9, top + 10, 7, 16);
+    g.fillStyle(0xffd060).fillRect(ex + T + 11, top + 13, 3, 3);
+    g.fillStyle(0xe8e0c8).fillRect(ex + T + 11, top + 20, 3, 3);
+    // floor indicator
+    g.fillStyle(0x1a1a1a).fillRect(ex + 12, e.y * T + 1, 24, 9);
+    g.fillStyle(0xff6030).fillRect(ex + 15, e.y * T + 3, 3, 5).fillRect(ex + 20, e.y * T + 3, 3, 5).fillRect(ex + 28, e.y * T + 4, 4, 3);
+
+    const mask = this.make.graphics({}, false).fillRect(ex, top, T, H).createGeometryMask();
+    const depth = (e.y + 1) * T + 1;
+    this.doors.push([
+      this.add.image(ex, top, 'door').setOrigin(0).setDepth(depth).setMask(mask),
+      this.add.image(ex + HALF, top, 'door').setOrigin(0).setDepth(depth).setMask(mask).setFlipX(true),
+    ]);
   }
 
   /** One elevator trip at a time; later arrivals wait their turn. */
   private openElevator(then: () => void) {
-    this.arrivals.push(then);
+    this.arrivals.push({ at: this.nextElevator, then });
+    this.nextElevator = (this.nextElevator + 1) % ELEVATORS.length;
     if (this.arrivals.length === 1) this.elevatorTrip();
   }
 
   private elevatorTrip() {
-    const ex = ELEVATOR.x * TILE;
-    const [l, r] = this.doors;
+    const { at, then } = this.arrivals[0];
+    const ex = ELEVATORS[at].x * TILE;
+    const [l, r] = this.doors[at];
     const slide = (from: number, to: number, delay: number, done: () => void) =>
       this.tweens.addCounter({
         from, to, delay, duration: 350,
         onUpdate: (tw) => {
           const gap = tw.getValue() ?? 0;
           l.x = ex - gap;
-          r.x = ex + 8 + gap;
+          r.x = ex + HALF + gap;
         },
         onComplete: done,
       });
-    slide(0, 8, 0, () => {
-      this.arrivals[0]();
-      slide(8, 0, 1400, () => {
+    slide(0, HALF, 0, () => {
+      then();
+      slide(HALF, 0, 1400, () => {
         this.arrivals.shift();
         if (this.arrivals.length) this.elevatorTrip();
       });
@@ -158,8 +302,9 @@ export class OfficeScene extends Phaser.Scene {
     this.hired.set(id, desk.id);
     if (this.hired.size >= Math.min(desks.length, CAST.length)) bus.emit('hire:full');
     this.screens[desk.id].setFrame('desktop');
+    const at = this.nextElevator;
     this.openElevator(() => {
-      this.agents.set(id, new Agent(this, id, name, `person${castIdx}`, desk, ELEVATOR));
+      this.agents.set(id, new Agent(this, id, name, `person${castIdx}`, desk, ELEVATORS[at]));
       this.note(id, `${name} arrived on the floor`);
       this.sim.begin(id);
     });
@@ -181,10 +326,15 @@ export class OfficeScene extends Phaser.Scene {
     if (ev.detail) this.note(a.id, ev.detail);
 
     switch (ev.activity) {
-      case 'thinking':
-        a.goTo(this.near(a.desk.seat, 3, 'down'), settle);
-        a.setWander(a.desk.seat, 3);
+      case 'thinking': {
+        const seat = this.tryClaim(a.id, spots.conference);
+        if (seat) a.goTo(seat, settle);
+        else {
+          a.goTo(this.near(a.desk.seat, 3, 'down'), settle);
+          a.setWander(a.desk.seat, 3);
+        }
         break;
+      }
       case 'reading':
         a.goTo(this.claim(a.id, spots.archive), settle);
         break;
@@ -254,20 +404,21 @@ export class OfficeScene extends Phaser.Scene {
     const n = this.papers.length;
     const tray = n % 3, height = Math.floor(n / 3);
     this.papers.push(
-      this.add.image(OUTBOX.left + 12 + tray * 20, OUTBOX.top + 6 - height * 2, 'paper').setOrigin(0.5, 1).setDepth(OUTBOX.top + 21 + n * 0.01),
+      this.add.image(OUTBOX.left + 24 + tray * 40, OUTBOX.top + 16 - height * 3, 'paper').setOrigin(0.5, 1).setDepth(OUTBOX.top + 41 + n * 0.01),
     );
   }
 
   // ---------------------------------------------------------------- places
 
-  private claim(id: string, group: Spot[]): Spot {
+  private tryClaim(id: string, group: Spot[]): Spot | null {
     const taken = new Set(this.claims.values());
     const free = group.find((s) => !taken.has(`${s.x},${s.y}`));
-    if (free) {
-      this.claims.set(id, `${free.x},${free.y}`);
-      return free;
-    }
-    return this.near(group[0], 2, group[0].face);
+    if (free) this.claims.set(id, `${free.x},${free.y}`);
+    return free ?? null;
+  }
+
+  private claim(id: string, group: Spot[]): Spot {
+    return this.tryClaim(id, group) ?? this.near(group[0], 2, group[0].face);
   }
 
   private near(center: Tile, radius: number, face: Spot['face']): Spot {
@@ -320,8 +471,15 @@ export class OfficeScene extends Phaser.Scene {
     bus.emit('agents', views);
   }
 
+  /** Head-and-shoulders portrait for the Properties panel. */
   private avatar(tex: string) {
-    if (!this.avatars.has(tex)) this.avatars.set(tex, this.textures.getBase64(tex, 'down0'));
+    if (!this.avatars.has(tex)) {
+      const f = this.textures.getFrame(tex, 'down0');
+      const c = document.createElement('canvas');
+      c.width = c.height = 48;
+      c.getContext('2d')!.drawImage(f.source.image as CanvasImageSource, f.cutX, f.cutY + 2, 48, 48, 0, 0, 48, 48);
+      this.avatars.set(tex, c.toDataURL());
+    }
     return this.avatars.get(tex)!;
   }
 }

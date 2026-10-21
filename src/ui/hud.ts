@@ -100,7 +100,10 @@ export function initHud() {
         const dot = el('span', 'dot');
         dot.style.background = DOT[a.activity];
         li.append(dot, el('b', undefined, a.name), el('span', 'status', LABEL[a.activity]));
-        li.onclick = () => bus.emit('select', a.id);
+        li.onclick = () => {
+          bus.emit('select', a.id);
+          bus.emit('focus', a.id);
+        };
         return li;
       }),
     );
@@ -167,6 +170,11 @@ export function initHud() {
     bus.emit('hire');
   };
   auto.onchange = () => bus.emit('autoapprove', auto.checked);
+
+  byId('zoom-in').onclick = () => bus.emit('zoom', 'in');
+  byId('zoom-out').onclick = () => bus.emit('zoom', 'out');
+  byId('zoom-fit').onclick = () => bus.emit('zoom', 'fit');
+  bus.on('zoom:level', (z: number) => (byId('zoom-level').textContent = `${Math.round(z * 100)}%`));
 
   const tick = () => (clock.textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
   tick();
