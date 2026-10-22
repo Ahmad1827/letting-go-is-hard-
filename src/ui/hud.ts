@@ -182,14 +182,19 @@ function meter(fraction: number) {
 }
 
 /**
- * Usage: the plan's windows as Claude Code reports them (5-hour, weekly), plus
- * tokens per agent. The rail tab carries a small meter; its panel has the details.
+ * Usage: the plan's windows (5-hour, weekly), fetched live from Claude like
+ * Claude Code's /usage and also picked up from agents' turns, plus tokens per
+ * agent. The rail tab carries a small meter; its panel has the details.
  */
 function initUsage() {
   const tray = byId('usage-meter');
   const body = byId('usage-body');
   const KEY = 'lgih.limits';
+  const live = (window as { office?: { usage?: { get(): Promise<Limits | { error: string }> } } }).office?.usage;
   let limits: Limits | null = null;
+  /** Why the last live check didn't work, if it didn't. */
+  let problem = '';
+  let lastFetch = 0;
   let real = false;
   let staff: AgentView[] = [];
   try {
@@ -221,8 +226,9 @@ function initUsage() {
       }
       parts.push(table);
       const age = Math.round((Date.now() - limits!.at) / 60000);
-      parts.push(el('p', 'hint', `As reported by Claude Code ${age < 1 ? 'just now' : `${age} min ago`}${limits!.status && limits!.status !== 'allowed' ? `, status: ${limits!.status}` : ''}.`));
-    } else parts.push(el('p', 'hint', real ? 'No numbers yet. They show up once an agent starts working.' : 'Simulated agents don’t use your plan.'));
+      parts.push(el('p', 'hint', `Updated ${age < 1 ? 'just now' : `${age} min ago`}${limits!.status && limits!.status !== 'allowed' ? `, status: ${limits!.status}` : ''}.`));
+    } else parts.push(el('p', 'hint', real ? 'No numbers yet.' : 'Simulated agents don’t use your plan.'));
+    if (problem) parts.push(el('p', 'hint', problem));
 
     const used = staff.filter((a) => a.usage);
     parts.push(el('b', undefined, 'Per agent'));
@@ -247,7 +253,27 @@ function initUsage() {
     body.replaceChildren(...parts);
   };
 
-  bus.on('panel', (name: string, on: boolean) => name === 'usage' && on && renderPop());
+  /** Ask Claude for the current numbers; opening the panel asks again unless it just did. */
+  const refresh = async (minAge = 0) => {
+    if (!live || Date.now() - lastFetch < minAge) return;
+    lastFetch = Date.now();
+    const r = await live.get();
+    if ('error' in r) {
+      problem = r.error;
+      renderPop();
+    } else {
+      problem = '';
+      bus.emit('usage:limits', r);
+    }
+  };
+  void refresh();
+  window.setInterval(() => void refresh(), 60_000);
+
+  bus.on('panel', (name: string, on: boolean) => {
+    if (name !== 'usage' || !on) return;
+    renderPop();
+    void refresh(15_000);
+  });
   bus.on('usage:limits', (l: Limits) => {
     limits = l;
     try {
@@ -620,7 +646,7 @@ export function initHud() {
     const key = `${a.log.length}|${a.log[a.log.length - 1] ?? ''}`;
     if (p.shown !== key) {
       const atBottom = p.log.scrollHeight - p.log.scrollTop - p.log.clientHeight < 30;
-      p.log.textContent = a.log.slice(-150).join('\n');
+      p.log.textContent = a.log.join('\n');
       p.shown = key;
       if (atBottom) p.log.scrollTop = p.log.scrollHeight;
     }

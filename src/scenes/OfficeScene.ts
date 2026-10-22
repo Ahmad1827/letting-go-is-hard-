@@ -40,8 +40,8 @@ interface OfficeSave {
 }
 
 const SAVE_KEY = 'lgih.office';
-/** Log lines kept per person between runs. */
-const SAVED_LOG = 120;
+/** Log lines kept per person, on screen and between runs. */
+const LOG_LINES = 2000;
 
 /** Merge tiles into rectangles [x, y, w, h]: runs along each row, stacked where rows match. */
 function mergeTiles(tiles: [number, number][]): [number, number, number, number][] {
@@ -106,6 +106,8 @@ export class OfficeScene extends Phaser.Scene {
   private saveTimer?: number;
   /** Closing: what's on screen now is what gets remembered. */
   private frozen = false;
+  /** Last time's staff are back; until then a save would write over them with an empty office. */
+  private loaded = false;
   /** agent id -> desk id, including agents still in the elevator */
   private hired = new Map<string, number>();
   private arrivals: { at: number; then: () => void }[] = [];
@@ -175,9 +177,13 @@ export class OfficeScene extends Phaser.Scene {
     const bridge = this.office()?.agents;
     this.crew = bridge ? new RealCrew(bridge, hooks) : new Sim(this.time, hooks);
     bus.emit('crew', this.crew.real);
+    // read the save right away: settings and projects can take seconds (finding WSL on Windows)
+    const saved = this.loadSave();
     void this.loadSettings()
       .then(() => this.loadProjects())
-      .then(() => this.loadStaff());
+      .catch(() => {}) // the staff still come back without settings or projects
+      .then(() => this.loadStaff(saved))
+      .then(() => (this.loaded = true));
     // closing with work in progress: Electron asks how many are mid-job, and may hide the window
     this.office()?.app?.onWorkingQuery(() => this.crew.workingCount());
     this.office()?.app?.onBackground((on) => {
@@ -202,6 +208,11 @@ export class OfficeScene extends Phaser.Scene {
       this.lightsOut(done);
     });
     bus.on('agent:fire', (id: string) => this.fire(id));
+    bus.on('agent:hold', ({ id, on }: { id: string; on: boolean }) => this.hold([id], on));
+    bus.on('team:hold', ({ id, on }: { id: string; on: boolean }) => {
+      const t = this.teamList.find((x) => x.id === id);
+      if (t) this.hold([t.manager, ...t.workers], on);
+    });
     bus.on('approval:resolve', ({ id, ok }: { id: string; ok: boolean }) => this.resolve(id, ok));
     bus.on('pitch:decide', ({ id, decision }: { id: string; decision: Decision }) => this.crew.decide(id, decision));
     bus.on('agent:say', ({ id, text, pictures }: { id: string; text: string; pictures?: Picture[] }) => this.crew.say(id, text, pictures));
@@ -538,8 +549,8 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   /** Last time's staff walk back in: already at their desks, picking up where they left off. */
-  private async loadStaff() {
-    const save = await this.loadSave();
+  private async loadStaff(saved: Promise<OfficeSave | null>) {
+    const save = await saved;
     if (!save?.agents.length) {
       // simulated staff show up on their own; real ones are hired one by one, since each runs Claude Code
       if (!this.crew.real) [300, 2600, 4900].forEach((ms) => this.time.delayedCall(ms, () => this.hire()));
@@ -576,21 +587,21 @@ export class OfficeScene extends Phaser.Scene {
     }
   }
 
-  /** Remember the office a moment after it changes. */
+  /** Remember the office a moment after it changes; a busy office still saves every 1.5s. */
   private saveSoon() {
-    if (this.frozen) return;
-    window.clearTimeout(this.saveTimer);
+    if (this.frozen || this.saveTimer !== undefined) return;
     this.saveTimer = window.setTimeout(() => this.save(), 1500);
   }
 
   private save() {
-    if (this.frozen) return;
     window.clearTimeout(this.saveTimer);
+    this.saveTimer = undefined;
+    if (this.frozen || !this.loaded) return;
     const castOf = (tex: string) => Number(tex.replace('person', ''));
     const data: OfficeSave = {
       v: 1,
       shipped: this.shipped,
-      agents: [...this.agents.values()].map((a) => ({ id: a.id, name: a.name, cast: castOf(a.tex), desk: a.desk.id, log: a.log.slice(-SAVED_LOG) })),
+      agents: [...this.agents.values()].map((a) => ({ id: a.id, name: a.name, cast: castOf(a.tex), desk: a.desk.id, log: a.log.slice(-LOG_LINES) })),
       crew: this.crew.snapshot(),
     };
     const memory = this.office()?.memory;
@@ -602,6 +613,18 @@ export class OfficeScene extends Phaser.Scene {
         // no storage: this browser session just won't be remembered
       }
     }
+  }
+
+  /** Put people on hold (they stop where they are) or reopen them. */
+  private hold(ids: string[], on: boolean) {
+    for (const id of ids) {
+      if (!this.agents.has(id)) continue;
+      if (on) {
+        if (this.pending.delete(id)) this.pushApprovals();
+        this.crew.hold(id);
+      } else this.crew.unhold(id);
+    }
+    this.dirty = true;
   }
 
   /** Let someone go: they stop, walk to the elevator and leave, and their desk is free again. */
@@ -731,7 +754,7 @@ export class OfficeScene extends Phaser.Scene {
     if (!a) return;
     const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     a.log.push(`${t}  ${text}`);
-    if (a.log.length > 300) a.log.shift();
+    if (a.log.length > LOG_LINES) a.log.shift();
     this.dirty = true;
   }
 

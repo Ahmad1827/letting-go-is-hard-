@@ -68,8 +68,9 @@ instead" box on a pitch, or a new team's task. They go to Claude along with your
 files). Turn it off or change the volume in the *Music* panel; it remembers your choice.
 
 The *Usage* tab carries a small meter for your plan's 5-hour window; its panel shows every
-window Claude Code reports (5-hour, weekly), when they reset, and how many tokens each agent
-has used.
+window (5-hour, weekly), when they reset, and how many tokens each agent has used. The
+numbers come live from Claude every minute, the same ones Claude Code's `/usage` shows,
+using Claude Code's saved login (`electron/usage.mjs`).
 
 **Auto mode:** approved work runs in Claude Code's auto mode, so agents decide what's safe
 on their own and only genuinely risky actions ask. Switch to "ask me" in Settings.
@@ -89,16 +90,23 @@ LLM with `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, or another account wit
 **Work Board:** click the corkboard in Ahmad's office (or *Board* on the right) to see everyone, grouped by team, with where they are in the cycle, what they're
 doing, the project and branch, and how long they've been at it.
 
+**Hold:** every card on the board has *Hold*, and every team *Hold team*. Held agents stop
+where they are and keep their job, branch and conversation until you *Reopen* them; then
+they pick up exactly where they stopped. Messages for them (yours, or a worker's report to
+a held manager) wait until they're back. Holds survive closing the app.
+
 Click an agent to see their full log, switch their model (Fable 5.1, Opus 5.5, Sonnet 5.5,
 Haiku 5.5, older versions, or Claude Code's default), stop them, message them, or fire them.
 In a plain browser (`npx vite`) the agents are simulated instead (`src/agents/sim.ts`).
 
 **Staff are remembered.** Close the app and open it again and everyone is back at their
-desk, with their model, team, log and usage. Whoever was in the middle of an approved job
-picks it back up on the same branch, whoever was waiting to pitch gets back in line, and the
-rest go looking for their next idea. People only leave when you **Fire** them (in their
+desk, with their model, team, full log and usage, and they continue their own Claude Code
+conversation (`--resume`), so they remember what was said and done. Whoever was in the
+middle of an approved job picks it back up on the same branch, whoever was waiting to pitch
+gets back in line, and the rest carry on researching. People only leave when you **Fire** them (in their
 panel, with a confirmation): they stop, walk to the elevator and go, their desk frees up,
-and their branches stay. The office is saved in `office.json` in the app's data folder.
+and their branches stay. The office is saved in `office.json` in the app's data folder
+(an office that suddenly goes empty keeps the previous one in `office.bak.json`).
 
 **Screen:** the office fills the window. The tabs down the right edge (Staff, Office, OKs,
 Agent, Usage, Music) slide their panels out over the floor and back; a badge on *Office*

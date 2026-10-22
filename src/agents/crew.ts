@@ -22,6 +22,12 @@ export interface StaffSave {
   /** Worker: their branch folder and the manager's task. */
   desk: unknown;
   assignment: string | null;
+  /** Their Claude Code conversation, to pick back up ('' cwd is the projects folder). */
+  session?: { id: string; cwd: string } | null;
+  /** On hold: what they were doing when the owner paused them. */
+  held?: Phase | null;
+  /** Messages that came in while on hold. */
+  inbox?: string[];
 }
 
 /** A team as remembered, with its job if it had one going. */
@@ -58,6 +64,10 @@ export interface Crew {
   restore(save: CrewSave): void;
   /** Let someone go for good: stop them, take them off their team and out of the line. */
   fire(agentId: string): void;
+  /** Put someone on hold: they stop where they are, keeping their job, until reopened. */
+  hold(agentId: string): void;
+  /** Off hold: pick up exactly where they stopped. */
+  unhold(agentId: string): void;
   /** The character reached the place for its current activity. */
   settled(agentId: string): void;
   /** Answer a pending permission request. */

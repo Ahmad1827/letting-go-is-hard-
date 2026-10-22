@@ -1,10 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
-import { readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setupAgents } from './agents.mjs';
 import { listProjects } from './projects.mjs';
 import { loadSettings, saveSettings, settings, testEngine } from './settings.mjs';
+import { planUsage } from './usage.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const devUrl = process.env.VITE_DEV_SERVER_URL;
@@ -108,6 +109,7 @@ ipcMain.handle('projects:list', () => listProjects());
 ipcMain.handle('settings:get', () => settings());
 ipcMain.handle('settings:set', (_e, next) => saveSettings(next));
 ipcMain.handle('engine:test', (_e, engine) => testEngine(engine));
+ipcMain.handle('usage:get', () => planUsage());
 // who works here, remembered between runs; written synchronously so it lands even while quitting
 const memoryFile = () => path.join(app.getPath('userData'), 'office.json');
 ipcMain.handle('memory:load', () => {
@@ -119,6 +121,9 @@ ipcMain.handle('memory:load', () => {
 });
 ipcMain.on('memory:save', (_e, data) => {
   try {
+    // an office going empty keeps the last staff in office.bak.json, in case that wasn't meant
+    if (!data.agents?.length && existsSync(memoryFile()) && JSON.parse(readFileSync(memoryFile(), 'utf8')).agents?.length)
+      copyFileSync(memoryFile(), memoryFile().replace(/\.json$/, '.bak.json'));
     writeFileSync(`${memoryFile()}.tmp`, JSON.stringify(data));
     renameSync(`${memoryFile()}.tmp`, memoryFile());
   } catch (e) {

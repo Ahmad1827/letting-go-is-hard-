@@ -102,7 +102,7 @@ export interface Settings {
 }
 
 /** Where an agent is in its cycle, for the work board. */
-export type Phase = 'research' | 'queued' | 'pitching' | 'work' | 'break' | 'standby' | 'home' | 'stopped';
+export type Phase = 'research' | 'queued' | 'pitching' | 'work' | 'break' | 'standby' | 'home' | 'stopped' | 'held';
 
 export interface AgentStatus {
   phase: Phase;

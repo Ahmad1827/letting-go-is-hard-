@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('office', {
     load: () => ipcRenderer.invoke('memory:load'),
     save: (data) => ipcRenderer.send('memory:save', data),
   },
+  /** The Claude plan's usage right now, as Claude Code's /usage shows it. */
+  usage: { get: () => ipcRenderer.invoke('usage:get') },
   app: {
     /** Close like the window's X button would (with the background question and the goodbye). */
     close: () => ipcRenderer.send('app:close'),

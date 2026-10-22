@@ -14,7 +14,7 @@ import type { AgentActivity, AgentStatus, Decision, Idea, Phase, Picture, Projec
  */
 
 type Msg =
-  | { kind: 'init'; model: string; cwd: string }
+  | { kind: 'init'; model: string; cwd: string; session?: string }
   | { kind: 'assistant'; model: string; parts: ({ type: 'text'; text: string } | { type: 'tool'; name: string; input: Record<string, unknown> })[] }
   | { kind: 'permission'; requestId: string; tool: string; input: Record<string, unknown>; description: string }
   | { kind: 'result'; ok: boolean; text: string; cost: number; tokens: number }
@@ -24,7 +24,7 @@ type Msg =
 /** A user message: plain text, or text with pictures. */
 type Content = string | ({ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } })[];
 
-interface StartConfig { cwd?: string; model?: string; engine?: string; system: string; prompt: Content; mode: string }
+interface StartConfig { cwd?: string; model?: string; engine?: string; system: string; prompt: Content; mode: string; resume?: string }
 
 interface WorkRequest { project: string; projectPath: string | null; branch: string; isNew: boolean; base?: string; inPlace?: boolean }
 interface WorkPlace { cwd: string; path: string; mode: string; branch?: string; note: string }
@@ -78,6 +78,18 @@ interface Staff {
   usage: AgentUsage;
   /** The running session's cost so far; Claude Code reports it cumulatively. */
   sessionCost: number;
+  /** Their Claude Code conversation and the folder it belongs to ('' is the projects folder). */
+  session: { id: string; cwd: string } | null;
+  /** Folder of the session being started, until Claude Code says its id. */
+  launchCwd: string;
+  /** Back from a restart: the next launch in the session's folder continues that conversation. */
+  resumeNext: boolean;
+  /** A resumed launch, started over fresh if the old conversation can't be opened. */
+  retry: StartConfig | null;
+  /** On hold: the phase they were in when paused. */
+  held: Phase | null;
+  /** Messages for them that came in while on hold, delivered when they're back. */
+  inbox: string[];
 }
 
 interface TeamState extends Team {
@@ -138,7 +150,8 @@ When you finish a task, reply with a short summary for ${manager}: what you chan
 ${OWNER} or ${manager} may message you; answer briefly.`;
 
 /** Told to anyone picking a job back up after the app was closed. */
-const RESUME = `The office closed while you were on this and you're back now. Check what you already did here (git status, git log, the files), then carry on and finish the job.`;
+const RESUME = `You were paused (the office closed, or ${OWNER} put you on hold) while on this and you're back now. Check what you already did here (git status, git log, the files), then carry on and finish the job.`;
+const RESUME_RESEARCH = `You were paused (the office closed, or ${OWNER} put you on hold) while researching and you're back now. Carry on from where you were and end with the \`\`\`pitch block.`;
 
 const short = (s: string, n = 120) => (s.length > n ? `${s.slice(0, n - 3)}...` : s);
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24);
@@ -168,6 +181,7 @@ export class RealCrew implements Crew {
       name, phase: 'research', since: Date.now(), engine: this.settings.defaultEngine, model: this.settings.defaultModel, workCwd: null, workMode: 'default', idea: null, seen: new Set(), alive: false, nudged: false, permissions: [], place: 0,
       pitched: false, orders: null, ordersPictures: [], team: null, role: null, assignment: null, desk: null,
       activity: 'idle', lastShown: 0, usage: { tokens: 0, cost: 0 }, sessionCost: 0,
+      session: null, launchCwd: '', resumeNext: false, retry: null, held: null, inbox: [],
     };
   }
 
@@ -180,7 +194,7 @@ export class RealCrew implements Crew {
         phase: s.pitched ? 'pitching' : s.phase,
         idea: noPictures(s.idea),
         work: s.workCwd ? { cwd: s.workCwd, mode: s.workMode } : null,
-        desk: s.desk, assignment: s.assignment,
+        desk: s.desk, assignment: s.assignment, session: s.session, held: s.held, inbox: s.inbox,
       })),
       teams: [...this.teams.values()].map(({ job, ...t }) => ({ ...t, job: job && { ...job, idea: noPictures(job.idea) } })),
     };
@@ -191,6 +205,8 @@ export class RealCrew implements Crew {
       this.staff.set(p.id, {
         ...this.fresh(p.name), engine: p.engine, model: p.model, usage: { ...p.usage }, seen: new Set(p.seen),
         idea: p.idea, workCwd: p.work?.cwd ?? null, workMode: p.work?.mode ?? 'default', desk: p.desk as WorkPlace | null, assignment: p.assignment,
+        session: p.session ?? null, resumeNext: !!p.session, held: p.held ?? null, inbox: p.inbox ?? [],
+        ...(p.held ? { phase: 'held' as Phase } : {}),
       });
     }
     for (const t of save.teams) {
@@ -201,14 +217,53 @@ export class RealCrew implements Crew {
     }
     this.pushTeams();
     // everyone at once would be a stampede of Claude Code start-ups
-    save.staff.forEach((p, i) => window.setTimeout(() => this.resume(p.id, p.phase), 300 + i * 500));
+    save.staff.forEach((p, i) => window.setTimeout(() => (p.held ? this.emitNow(p.id, 'idle', 'On hold') : this.resume(p.id, p.phase)), 300 + i * 500));
+  }
+
+  hold(agentId: string) {
+    const s = this.staff.get(agentId);
+    if (!s || s.held) return;
+    s.held = s.pitched ? 'pitching' : s.phase;
+    // stop the process but keep the job, branch and conversation for later
+    this.bridge.stop(agentId);
+    s.alive = false;
+    s.retry = null;
+    window.clearTimeout(s.breakTimer);
+    window.clearTimeout(s.showTimer);
+    s.showTimer = undefined;
+    s.permissions = [];
+    if (this.line.includes(agentId)) this.leaveLine(agentId);
+    this.setPhase(s, 'held');
+    this.note(agentId, `${OWNER} put ${s.name} on hold`);
+    this.emitNow(agentId, 'idle', 'On hold');
+    this.checkAllDone();
+  }
+
+  unhold(agentId: string) {
+    const s = this.staff.get(agentId);
+    if (!s?.held) return;
+    const phase = s.held;
+    s.held = null;
+    s.resumeNext = !!s.session;
+    const team = this.teamOf(s);
+    if (s.role === 'worker' && team?.job && s.assignment && !s.desk) {
+      // handed a task while on hold, before they had a branch: set it up now
+      const task = s.assignment;
+      s.assignment = null;
+      void this.assign(team, agentId, task);
+    } else this.resume(agentId, phase, 'Back from hold');
+    const inbox = s.inbox.splice(0);
+    for (const text of inbox) {
+      if (s.alive) this.bridge.send(agentId, text);
+      else this.say(agentId, text);
+    }
   }
 
   /** Pick up where they were: back to the job, back in line, or looking for the next idea. */
-  private resume(agentId: string, phase: Phase) {
+  private resume(agentId: string, phase: Phase, why = 'Back at the office') {
     const s = this.staff.get(agentId);
     if (!s) return;
-    this.note(agentId, 'Back at the office');
+    this.note(agentId, why);
     const team = this.teamOf(s);
     if (s.role === 'worker') {
       if (team?.job && s.desk && s.assignment) {
@@ -238,9 +293,13 @@ export class RealCrew implements Crew {
       this.line.push(agentId);
       this.note(agentId, `Still has the idea for ${s.idea.project}, waiting to see ${OWNER}`);
       this.refreshLine();
+    } else if (phase === 'research' && s.session?.cwd === '') {
+      // same conversation, so they still know what they'd looked at
+      this.research(agentId, RESUME_RESEARCH);
     } else {
       s.idea = null;
       s.workCwd = null;
+      s.resumeNext = false;
       this.research(agentId);
     }
   }
@@ -305,6 +364,11 @@ export class RealCrew implements Crew {
     if (!s) return;
     // talking to someone mid-pitch means "not that, do this instead"
     if (s.pitched) return this.decide(agentId, { kind: 'instead', text, pictures });
+    if (s.held) {
+      this.note(agentId, `${OWNER}: ${text} (on hold; they'll get this when reopened)`);
+      s.inbox.push(text);
+      return;
+    }
     this.note(agentId, `${OWNER}: ${text}${pictureNote(pictures)}`);
     const message = content(text, pictures);
     if (s.phase === 'break') {
@@ -365,7 +429,7 @@ export class RealCrew implements Crew {
   setBackground(on: boolean) {
     this.background = on;
     for (const [id, s] of this.staff) {
-      if (on && s.phase !== 'work' && !(s.role === 'worker' && this.teamOf(s)?.job)) this.goHome(id);
+      if (on && s.phase !== 'work' && s.phase !== 'held' && !(s.role === 'worker' && this.teamOf(s)?.job)) this.goHome(id);
       if (!on && s.phase === 'home') {
         this.note(id, 'Back at the office');
         this.research(id);
@@ -444,7 +508,9 @@ export class RealCrew implements Crew {
       this.reset(id);
       s.team = s.role = null;
       this.note(id, `${team.name} was disbanded; back to working solo`);
-      window.setTimeout(() => this.staff.has(id) && this.research(id), i * 1500);
+      // anyone on hold stays put; reopening them starts them solo
+      if (s.held) s.held = 'research';
+      else window.setTimeout(() => this.staff.has(id) && !this.staff.get(id)!.held && this.research(id), i * 1500);
     });
     this.pushTeams();
   }
@@ -583,6 +649,13 @@ export class RealCrew implements Crew {
     if (!job) return;
     this.note(workerId, `Task from ${this.nameOf(team.manager)}: ${task}`);
     this.note(team.manager, `Assigned ${w.name}: ${short(task)}`);
+    if (w.held) {
+      // kept for when they're reopened
+      w.assignment = w.assignment ? `${w.assignment}; ${task}` : task;
+      w.held = 'work';
+      this.bridge.send(team.manager, `${w.name} is on hold, so that task waits until ${OWNER} reopens them. Carry on with other work meanwhile.`);
+      return;
+    }
     const busy = w.assignment !== null;
     w.assignment = busy ? `${w.assignment}; ${task}` : task;
     this.setPhase(w, 'work');
@@ -631,7 +704,12 @@ export class RealCrew implements Crew {
     if (!s) return; // let go while their folder was being set up
     s.alive = true;
     s.sessionCost = 0;
-    this.bridge.start(agentId, { ...cfg, engine: s.engine, model: cfg.model ?? (s.model || undefined) }).catch((e: Error) => {
+    const cwd = cfg.cwd ?? '';
+    const resume = s.resumeNext && s.session?.cwd === cwd ? s.session.id : undefined;
+    s.resumeNext = false;
+    s.launchCwd = cwd;
+    s.retry = resume ? cfg : null;
+    this.bridge.start(agentId, { ...cfg, resume, engine: s.engine, model: cfg.model ?? (s.model || undefined) }).catch((e: Error) => {
       s.alive = false;
       this.note(agentId, `Couldn't start Claude Code: ${e.message}`);
     });
@@ -658,11 +736,13 @@ export class RealCrew implements Crew {
 
   private onMessage(agentId: string, msg: Msg) {
     const s = this.staff.get(agentId);
-    if (!s) return;
+    if (!s || s.held) return; // on hold: whatever was still on its way is dropped
     const busy = s.phase === 'research' || s.phase === 'work';
     switch (msg.kind) {
       case 'init':
         s.alive = true;
+        s.retry = null;
+        if (msg.session) s.session = { id: msg.session, cwd: s.launchCwd };
         break;
       case 'assistant':
         for (const part of msg.parts) {
@@ -709,6 +789,7 @@ export class RealCrew implements Crew {
         this.hooks.limits({ status: msg.status, windows: msg.windows, at: Date.now() });
         break;
       case 'result':
+        if (s.retry) break; // a resume that never got going; its exit starts a fresh one
         s.usage.tokens += msg.tokens;
         s.usage.cost += Math.max(0, msg.cost - s.sessionCost);
         s.sessionCost = msg.cost;
@@ -716,6 +797,13 @@ export class RealCrew implements Crew {
         break;
       case 'exit':
         s.alive = false;
+        if (s.retry) {
+          // the old conversation is gone: same job, fresh conversation
+          const cfg = s.retry;
+          this.note(agentId, `Couldn't reopen the last conversation${msg.error ? ` (${msg.error})` : ''}; starting a fresh one`);
+          this.launch(agentId, cfg);
+          break;
+        }
         if (msg.error) this.note(agentId, `Claude Code stopped: ${msg.error}`);
         if (s.phase === 'research' || s.phase === 'work') {
           this.setPhase(s, 'stopped');
@@ -756,7 +844,10 @@ export class RealCrew implements Crew {
     if (team && s.role === 'worker') {
       // report back to the manager and wait for the next piece
       const done = s.assignment ?? 'their task';
-      this.bridge.send(team.manager, `${s.name} finished "${short(done, 200)}" on branch ${s.desk?.branch ?? 'the shared folder'}:\n${msg.text}`);
+      const report = `${s.name} finished "${short(done, 200)}" on branch ${s.desk?.branch ?? 'the shared folder'}:\n${msg.text}`;
+      const manager = this.staff.get(team.manager);
+      if (manager?.held) manager.inbox.push(report);
+      else this.bridge.send(team.manager, report);
       this.note(team.manager, `${s.name} reported back`);
       this.note(agentId, `Reported to ${this.nameOf(team.manager)}`);
       this.standby(agentId);

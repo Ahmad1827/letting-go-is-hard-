@@ -203,7 +203,7 @@ const STAGES: [string, Phase[]][] = [
   ['Done', ['break']],
 ];
 
-const PHASE_NOTE: Partial<Record<Phase, string>> = { home: 'Gone home', stopped: 'Stopped' };
+const PHASE_NOTE: Partial<Record<Phase, string>> = { home: 'Gone home', stopped: 'Stopped', held: 'On hold' };
 
 function since(ms: number) {
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
@@ -212,8 +212,20 @@ function since(ms: number) {
 
 const shortTokens = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : `${n}`);
 
+/** Hold (stop where they are) or reopen one person or a whole team. */
+function holdButton(event: 'agent:hold' | 'team:hold', id: string, held: boolean, who = '') {
+  const b = el('button', 'small hold', held ? `Reopen${who}` : `Hold${who}`);
+  b.title = held ? 'Pick up exactly where they stopped' : 'Stop them where they are, job and all, until you reopen them';
+  b.onclick = (e) => {
+    e.stopPropagation();
+    bus.emit(event, { id, on: !held });
+  };
+  return b;
+}
+
 function card(a: AgentView, close: () => void) {
-  const c = el('div', 'board-card');
+  const held = a.status.phase === 'held';
+  const c = el('div', `board-card${held ? ' held' : ''}`);
   c.onclick = () => {
     bus.emit('select', a.id);
     bus.emit('focus', a.id);
@@ -226,7 +238,7 @@ function card(a: AgentView, close: () => void) {
   const head = el('div', 'board-head');
   head.append(el('b', undefined, a.name));
   if (a.role) head.append(el('span', `role ${a.role}`, a.role === 'manager' ? 'Manager' : 'Worker'));
-  head.append(el('span', 'hint', modelLabel(settings, a.status.engine, a.model)));
+  head.append(el('span', 'hint', modelLabel(settings, a.status.engine, a.model)), holdButton('agent:hold', a.id, held));
 
   // where they are in the cycle
   const track = el('div', 'track');
@@ -258,8 +270,12 @@ function card(a: AgentView, close: () => void) {
 
 function initBoard() {
   const w = popup('board-pop');
+  // the board redraws every second; not while a button is held down, or the click would be lost
+  let pressing = false;
+  w.body.addEventListener('pointerdown', () => (pressing = true));
+  window.addEventListener('pointerup', () => window.setTimeout(() => (pressing = false)));
   const render = () => {
-    if (w.pop.hidden) return;
+    if (w.pop.hidden || pressing) return;
     const byId = new Map(agents.map((a) => [a.id, a]));
     const count = (p: Phase[]) => agents.filter((a) => p.includes(a.status.phase)).length;
     const summary = el('div', 'board-summary');
@@ -268,6 +284,7 @@ function initBoard() {
       [count(['work']), 'working'],
       [count(['research']), 'researching'],
       [count(['queued', 'pitching']), `waiting for ${OWNER}`],
+      [count(['held']), 'on hold'],
       [teams.length, teams.length === 1 ? 'team' : 'teams'],
     ] as [number, string][])
       summary.append(el('span', 'chip', `${n} ${label}`));
@@ -278,7 +295,10 @@ function initBoard() {
       const box = el('fieldset', 'board-group');
       const manager = byId.get(t.manager);
       const job = manager?.status.phase === 'work' ? manager.task : manager?.status.phase === 'research' ? 'looking for an idea' : '';
-      box.append(el('legend', undefined, `${t.name}${job ? ` · ${job}` : ''}`));
+      const legend = el('legend', undefined, `${t.name}${job ? ` · ${job}` : ''}`);
+      const allHeld = [t.manager, ...t.workers].every((id) => byId.get(id)?.status.phase === 'held');
+      legend.append(holdButton('team:hold', t.id, allHeld, ' team'));
+      box.append(legend);
       for (const id of [t.manager, ...t.workers]) {
         const a = byId.get(id);
         if (a) box.append(card(a, w.hide));

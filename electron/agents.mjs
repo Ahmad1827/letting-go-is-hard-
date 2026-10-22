@@ -56,7 +56,7 @@ function resolveCommand(command) {
 
 /** Keep only what the office needs from each stream-json event. */
 function slim(m) {
-  if (m.type === 'system' && m.subtype === 'init') return { kind: 'init', model: m.model, cwd: m.cwd };
+  if (m.type === 'system' && m.subtype === 'init') return { kind: 'init', model: m.model, cwd: m.cwd, session: m.session_id };
   if (m.type === 'assistant') {
     const parts = [];
     for (const c of m.message.content) {
@@ -82,16 +82,18 @@ export function setupAgents(ipcMain, getWindow) {
   const emit = (id, msg) => getWindow()?.webContents.send('agent:msg', id, msg);
 
   /** (Re)start an agent's Claude Code session. */
-  function start(id, { cwd, model, system, prompt, mode, engine: engineId }) {
+  function start(id, { cwd, model, system, prompt, mode, engine: engineId, resume }) {
     const eng = engine(engineId);
     stop(id);
     const args = [
       '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
       '--permission-prompt-tool', 'stdio', '--permission-mode', mode || 'default',
-      '--tools', TOOLS, '--strict-mcp-config', '--no-session-persistence',
+      '--tools', TOOLS, '--strict-mcp-config',
       '--append-system-prompt', system,
     ];
     if (model) args.push('--model', model);
+    // pick last time's conversation back up, so they remember what was said and done
+    if (resume) args.push('--resume', resume);
     const dir = cwd || settings().projectsRoot;
     // a missing folder makes spawn fail with a misleading "claude ENOENT"
     if (!existsSync(dir)) {

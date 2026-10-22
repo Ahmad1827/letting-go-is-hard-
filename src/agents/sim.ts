@@ -38,6 +38,8 @@ interface Run {
   phase: Phase;
   since: number;
   engine: string;
+  /** On hold: the phase they were in when paused. */
+  held?: Phase | null;
 }
 
 const RISKY = (idea: Idea) => [`git push origin ${idea.branch}`, 'rm -rf build/', 'npm install --save-dev vitest', 'git rebase main'];
@@ -118,6 +120,36 @@ export class Sim implements Crew {
     for (const t of save.teams) if ([t.manager, ...t.workers].every((id) => this.runs.has(id))) this.createTeam({ name: t.name, manager: t.manager, workers: t.workers });
   }
 
+  /** Simulated hold: the step clock stops; anyone in line steps out and looks again when reopened. */
+  hold(agentId: string) {
+    const run = this.runs.get(agentId);
+    if (!run || run.held) return;
+    run.held = run.phase;
+    if (run.timer) run.timer.paused = true;
+    if (this.line.includes(agentId)) {
+      if (this.line[0] === agentId && run.pitched) this.hooks.pitch(null, null);
+      run.pitched = false;
+      this.line = this.line.filter((x) => x !== agentId);
+      this.refreshLine();
+    }
+    this.setPhase(agentId, 'held');
+    this.note(agentId, `${OWNER} put ${run.name} on hold`);
+    this.hooks.emit({ agentId, activity: 'idle', detail: 'On hold' });
+  }
+
+  unhold(agentId: string) {
+    const run = this.runs.get(agentId);
+    if (!run?.held) return;
+    const phase = run.held;
+    run.held = null;
+    this.note(agentId, 'Back from hold');
+    if (phase === 'queued' || phase === 'pitching' || !run.timer) return this.research(agentId);
+    this.setPhase(agentId, phase);
+    run.timer.paused = false;
+    const step = run.steps[run.i];
+    if (step) this.hooks.emit({ agentId, activity: step.activity, detail: step.detail, task: run.idea?.title });
+  }
+
   fire(agentId: string) {
     const run = this.runs.get(agentId);
     if (!run) return;
@@ -136,7 +168,7 @@ export class Sim implements Crew {
   /** The office reports the agent reached the place for its current step; the step's clock starts now. */
   settled(agentId: string) {
     const run = this.runs.get(agentId);
-    if (!run || run.settled) return;
+    if (!run || run.settled || run.held) return;
     run.settled = true;
     const step = run.steps[run.i];
     if (!step || step.activity === 'awaiting' || step.activity === 'queued' || step.activity === 'standby') return; // wait for someone
