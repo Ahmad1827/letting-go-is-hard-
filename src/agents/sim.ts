@@ -110,7 +110,7 @@ export class Sim implements Crew {
     };
   }
 
-  /** Simulated staff just start their loop again; teams re-form and the manager pitches. */
+  /** Simulated staff just start their loop again; teams re-form and the manager pitches. Sample projects are always ready. */
   restore(save: CrewSave) {
     for (const p of save.staff) {
       this.begin(p.id, p.name);

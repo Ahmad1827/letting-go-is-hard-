@@ -177,13 +177,12 @@ export class OfficeScene extends Phaser.Scene {
     const bridge = this.office()?.agents;
     this.crew = bridge ? new RealCrew(bridge, hooks) : new Sim(this.time, hooks);
     bus.emit('crew', this.crew.real);
-    // read the save right away: settings and projects can take seconds (finding WSL on Windows)
-    const saved = this.loadSave();
-    void this.loadSettings()
+    // the staff come back as soon as the save is read: on Windows the projects are scanned across
+    // WSL and can take minutes, and nothing may be saved until last time's staff are back
+    const ready = this.loadSettings()
       .then(() => this.loadProjects())
-      .catch(() => {}) // the staff still come back without settings or projects
-      .then(() => this.loadStaff(saved))
-      .then(() => (this.loaded = true));
+      .catch(() => {}); // the staff still get to work without settings or projects
+    void this.loadStaff(this.loadSave(), ready).then(() => (this.loaded = true));
     // closing with work in progress: Electron asks how many are mid-job, and may hide the window
     this.office()?.app?.onWorkingQuery(() => this.crew.workingCount());
     this.office()?.app?.onBackground((on) => {
@@ -549,11 +548,11 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   /** Last time's staff walk back in: already at their desks, picking up where they left off. */
-  private async loadStaff(saved: Promise<OfficeSave | null>) {
+  private async loadStaff(saved: Promise<OfficeSave | null>, ready: Promise<unknown>) {
     const save = await saved;
     if (!save?.agents.length) {
       // simulated staff show up on their own; real ones are hired one by one, since each runs Claude Code
-      if (!this.crew.real) [300, 2600, 4900].forEach((ms) => this.time.delayedCall(ms, () => this.hire()));
+      if (!this.crew.real) void ready.then(() => [300, 2600, 4900].forEach((ms) => this.time.delayedCall(ms, () => this.hire())));
       return;
     }
     const placed = new Set<string>();
@@ -573,7 +572,7 @@ export class OfficeScene extends Phaser.Scene {
     this.shipped = save.shipped;
     bus.emit('shipped', this.shipped);
     for (let i = 0; i < Math.min(this.shipped, MAX_PAPERS); i++) this.addPaper();
-    this.crew.restore({ staff: save.crew.staff.filter((p) => placed.has(p.id)), teams: save.crew.teams });
+    this.crew.restore({ staff: save.crew.staff.filter((p) => placed.has(p.id)), teams: save.crew.teams }, ready);
     this.dirty = true;
   }
 

@@ -200,7 +200,7 @@ export class RealCrew implements Crew {
     };
   }
 
-  restore(save: CrewSave) {
+  restore(save: CrewSave, ready?: Promise<unknown>) {
     for (const p of save.staff) {
       this.staff.set(p.id, {
         ...this.fresh(p.name), engine: p.engine, model: p.model, usage: { ...p.usage }, seen: new Set(p.seen),
@@ -216,8 +216,17 @@ export class RealCrew implements Crew {
       for (const id of members) Object.assign(this.staff.get(id)!, { team: t.id, role: id === t.manager ? 'manager' : 'worker' });
     }
     this.pushTeams();
-    // everyone at once would be a stampede of Claude Code start-ups
-    save.staff.forEach((p, i) => window.setTimeout(() => (p.held ? this.emitNow(p.id, 'idle', 'On hold') : this.resume(p.id, p.phase)), 300 + i * 500));
+    // back to work once settings and projects are in; everyone at once would be a stampede of Claude Code start-ups
+    void Promise.resolve(ready).then(() =>
+      save.staff.forEach((p, i) =>
+        window.setTimeout(() => {
+          const s = this.staff.get(p.id);
+          if (!s) return; // fired while the projects were loading
+          if (s.held) this.emitNow(p.id, 'idle', 'On hold');
+          else this.resume(p.id, p.phase);
+        }, 300 + i * 500),
+      ),
+    );
   }
 
   hold(agentId: string) {

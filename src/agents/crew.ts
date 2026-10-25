@@ -60,8 +60,8 @@ export interface Crew {
   begin(agentId: string, name: string): void;
   /** What to remember about everyone, for next time. */
   snapshot(): CrewSave;
-  /** Bring back the staff from last time; their characters are already at their desks. */
-  restore(save: CrewSave): void;
+  /** Bring back the staff from last time; their characters are already at their desks. They get back to work once `ready` settles. */
+  restore(save: CrewSave, ready?: Promise<unknown>): void;
   /** Let someone go for good: stop them, take them off their team and out of the line. */
   fire(agentId: string): void;
   /** Put someone on hold: they stop where they are, keeping their job, until reopened. */
