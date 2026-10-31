@@ -97,6 +97,14 @@ a held manager) wait until they're back. Holds survive closing the app.
 
 Click an agent to see their full log, switch their model (Fable 5.1, Opus 5.5, Sonnet 5.5,
 Haiku 5.5, older versions, or Claude Code's default), stop them, message them, or fire them.
+
+**Skills** (the Skills button on an agent): tick which of the Claude Code skills installed on
+your machine that agent can use, or tick "Give new hires these skills too" to make them the
+default. Their skills show as tags on the agent's panel; click a tag's × to take one away.
+Each agent keeps their own skills between runs. Nobody has skills until you pick some. A
+change applies from their next job. An agent with skills also keeps any skills that belong
+to the project they're working in.
+
 In a plain browser (`npx vite`) the agents are simulated instead (`src/agents/sim.ts`).
 
 **Staff are remembered.** Close the app and open it again and everyone is back at their
@@ -140,6 +148,7 @@ CRTs glowing, and says goodbye before the app quits. Running agents are stopped 
 - `electron/main.mjs`: the desktop window.
 - `electron/agents.mjs`: runs one headless Claude Code session per agent and prepares worktrees.
 - `electron/settings.mjs`: saved settings and AI engines.
+- `electron/skills.mjs`: lists an engine's installed skills and limits an agent to the picked ones.
 - `electron/projects.mjs`, `electron/preload.cjs`: read-only scan of the projects folder, exposed to the page.
 - `scripts/dev.mjs`: starts Vite and opens Electron on it.
 - `src/agents/types.ts`: the `AgentEvent` contract. Anything that emits these can drive the office.

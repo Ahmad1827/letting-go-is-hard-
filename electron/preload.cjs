@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('office', {
     load: () => ipcRenderer.invoke('memory:load'),
     save: (data) => ipcRenderer.send('memory:save', data),
   },
+  /** The skills an engine has installed. */
+  skills: { list: (engine) => ipcRenderer.invoke('skills:list', engine) },
   /** The Claude plan's usage right now, as Claude Code's /usage shows it. */
   usage: { get: () => ipcRenderer.invoke('usage:get') },
   app: {

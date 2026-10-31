@@ -19,12 +19,13 @@ type Msg =
   | { kind: 'permission'; requestId: string; tool: string; input: Record<string, unknown>; description: string }
   | { kind: 'result'; ok: boolean; text: string; cost: number; tokens: number }
   | { kind: 'limits'; status?: string; windows: Record<string, UsageWindow> }
+  | { kind: 'note'; text: string }
   | { kind: 'exit'; code: number; error?: string };
 
 /** A user message: plain text, or text with pictures. */
 type Content = string | ({ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } })[];
 
-interface StartConfig { cwd?: string; model?: string; engine?: string; system: string; prompt: Content; mode: string; resume?: string }
+interface StartConfig { cwd?: string; model?: string; engine?: string; system: string; prompt: Content; mode: string; resume?: string; skills?: string[] }
 
 interface WorkRequest { project: string; projectPath: string | null; branch: string; isNew: boolean; base?: string; inPlace?: boolean }
 interface WorkPlace { cwd: string; path: string; mode: string; branch?: string; note: string }
@@ -49,6 +50,8 @@ interface Staff {
   since: number;
   engine: string;
   model: string;
+  /** The skills picked for them. Nothing picked means no skills at all. */
+  skills: string[];
   /** Where approved work is happening, once it starts, and its permission mode. */
   workCwd: string | null;
   workMode: string;
@@ -178,7 +181,7 @@ export class RealCrew implements Crew {
 
   private fresh(name: string): Staff {
     return {
-      name, phase: 'research', since: Date.now(), engine: this.settings.defaultEngine, model: this.settings.defaultModel, workCwd: null, workMode: 'default', idea: null, seen: new Set(), alive: false, nudged: false, permissions: [], place: 0,
+      name, phase: 'research', since: Date.now(), engine: this.settings.defaultEngine, model: this.settings.defaultModel, skills: [...(this.settings.defaultSkills ?? [])], workCwd: null, workMode: 'default', idea: null, seen: new Set(), alive: false, nudged: false, permissions: [], place: 0,
       pitched: false, orders: null, ordersPictures: [], team: null, role: null, assignment: null, desk: null,
       activity: 'idle', lastShown: 0, usage: { tokens: 0, cost: 0 }, sessionCost: 0,
       session: null, launchCwd: '', resumeNext: false, retry: null, held: null, inbox: [],
@@ -190,7 +193,7 @@ export class RealCrew implements Crew {
     const noPictures = (idea: Idea | null) => idea && { ...idea, pictures: undefined };
     return {
       staff: [...this.staff].map(([id, s]) => ({
-        id, name: s.name, engine: s.engine, model: s.model, usage: s.usage, seen: [...s.seen],
+        id, name: s.name, engine: s.engine, model: s.model, skills: s.skills, usage: s.usage, seen: [...s.seen],
         phase: s.pitched ? 'pitching' : s.phase,
         idea: noPictures(s.idea),
         work: s.workCwd ? { cwd: s.workCwd, mode: s.workMode } : null,
@@ -203,7 +206,7 @@ export class RealCrew implements Crew {
   restore(save: CrewSave, ready?: Promise<unknown>) {
     for (const p of save.staff) {
       this.staff.set(p.id, {
-        ...this.fresh(p.name), engine: p.engine, model: p.model, usage: { ...p.usage }, seen: new Set(p.seen),
+        ...this.fresh(p.name), engine: p.engine, model: p.model, skills: p.skills ?? [], usage: { ...p.usage }, seen: new Set(p.seen),
         idea: p.idea, workCwd: p.work?.cwd ?? null, workMode: p.work?.mode ?? 'default', desk: p.desk as WorkPlace | null, assignment: p.assignment,
         session: p.session ?? null, resumeNext: !!p.session, held: p.held ?? null, inbox: p.inbox ?? [],
         ...(p.held ? { phase: 'held' as Phase } : {}),
@@ -405,6 +408,17 @@ export class RealCrew implements Crew {
 
   modelOf(agentId: string) {
     return this.staff.get(agentId)?.model ?? '';
+  }
+
+  setSkills(agentId: string, skills: string[]) {
+    const s = this.staff.get(agentId);
+    if (!s) return;
+    s.skills = skills;
+    this.note(agentId, `Skills: ${skills.join(', ') || 'none'}${s.alive ? ' (from their next job)' : ''}`);
+  }
+
+  skillsOf(agentId: string) {
+    return this.staff.get(agentId)?.skills ?? [];
   }
 
   usageOf(agentId: string) {
@@ -718,7 +732,7 @@ export class RealCrew implements Crew {
     s.resumeNext = false;
     s.launchCwd = cwd;
     s.retry = resume ? cfg : null;
-    this.bridge.start(agentId, { ...cfg, resume, engine: s.engine, model: cfg.model ?? (s.model || undefined) }).catch((e: Error) => {
+    this.bridge.start(agentId, { ...cfg, resume, engine: s.engine, model: cfg.model ?? (s.model || undefined), skills: s.skills }).catch((e: Error) => {
       s.alive = false;
       this.note(agentId, `Couldn't start Claude Code: ${e.message}`);
     });
@@ -794,6 +808,9 @@ export class RealCrew implements Crew {
         }
         break;
       }
+      case 'note':
+        this.note(agentId, msg.text);
+        break;
       case 'limits':
         this.hooks.limits({ status: msg.status, windows: msg.windows, at: Date.now() });
         break;
@@ -1004,6 +1021,7 @@ function describe(tool: string, input: Record<string, unknown>, root: string): [
     case 'Bash': return ['running', `$ ${short(String(input.command ?? ''))}`];
     case 'WebSearch': return ['reading', `Search the web: ${input.query}`];
     case 'WebFetch': return ['reading', `Fetch ${input.url}`];
+    case 'Skill': return ['reading', `Use the ${input.skill} skill`];
     default: return ['thinking', tool];
   }
 }
@@ -1011,5 +1029,6 @@ function describe(tool: string, input: Record<string, unknown>, root: string): [
 function permissionText(tool: string, input: Record<string, unknown>, root: string) {
   if (tool === 'Bash') return `run: ${short(String(input.command ?? ''), 160)}`;
   if (tool === 'Edit' || tool === 'Write') return `${tool.toLowerCase()} ${rel(input.file_path, root)}`;
+  if (tool === 'Skill') return `use the ${input.skill} skill`;
   return `use ${tool}`;
 }

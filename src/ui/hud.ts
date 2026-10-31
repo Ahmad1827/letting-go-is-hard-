@@ -1,6 +1,6 @@
 import { bus } from '../bus';
 import { DEFAULT_SETTINGS, engineIn, type AgentUsage, type Limits } from '../agents/crew';
-import type { AgentActivity, AgentStatus, Decision, Idea, Role, Settings, Team } from '../agents/types';
+import type { AgentActivity, AgentStatus, Decision, Idea, Role, Settings, SkillInfo, Team } from '../agents/types';
 import { Lofi } from '../audio/lofi';
 import { OWNER } from '../owner';
 import { byId, el } from './dom';
@@ -17,6 +17,8 @@ export interface AgentView {
   avatar: string;
   log: string[];
   model: string;
+  /** The skills picked for them. */
+  skills: string[];
   /** A real Claude Code session rather than a simulated one. */
   real: boolean;
   usage: AgentUsage | null;
@@ -370,6 +372,88 @@ function initTeams() {
   bus.on('teams', (list: Team[]) => (teams = list));
 }
 
+const SKILL_GROUPS: [string, (s: SkillInfo) => boolean][] = [
+  ['Your skills', (s) => s.source === 'user'],
+  ['From claude.ai', (s) => s.source === 'claude.ai sync'],
+  ['From the projects folder', (s) => s.source === 'project'],
+  ['From plugins', (s) => !['user', 'claude.ai sync', 'project'].includes(s.source)],
+];
+
+/** The Skills window: tick what this agent may use, from what's installed on this machine. */
+function pickSkills(a: AgentView) {
+  const pop = byId('skills-pop');
+  const body = byId('skills-body');
+  byId('skills-title').textContent = `Skills for ${a.name}`;
+  byId('skills-close').onclick = () => (pop.hidden = true);
+  body.replaceChildren(el('p', 'hint', 'Looking at what’s installed...'));
+  pop.hidden = false;
+
+  const office = (window as { office?: { skills?: { list(engine: string): Promise<{ skills: SkillInfo[]; error?: string }> } } }).office;
+  void (office?.skills?.list(a.status.engine) ?? Promise.resolve({ skills: [] as SkillInfo[], error: undefined })).then(({ skills, error }) => {
+    if (pop.hidden) return;
+    const close = el('button', undefined, 'Close');
+    close.onclick = () => (pop.hidden = true);
+    if (!skills.length) {
+      body.replaceChildren(el('p', 'hint', error ? `Couldn’t list the skills: ${error}` : 'No skills installed yet. Add some to Claude Code and they’ll show up here.'), close);
+      return;
+    }
+    const chosen = new Set(a.skills);
+    const search = el('input');
+    search.placeholder = `Search ${skills.length} skills...`;
+    const list = el('div', 'skills-list');
+    const count = el('span', 'hint');
+    const showCount = () => (count.textContent = chosen.size ? `${chosen.size} picked` : 'None picked: no skills for them');
+
+    const row = (s: SkillInfo) => {
+      const label = el('label', 'skill');
+      const box = el('input');
+      box.type = 'checkbox';
+      box.checked = chosen.has(s.id);
+      box.onchange = () => {
+        if (box.checked) chosen.add(s.id);
+        else chosen.delete(s.id);
+        showCount();
+      };
+      const about = el('span', 'hint', s.description);
+      about.title = s.description;
+      label.append(box, el('b', undefined, s.name), about);
+      return label;
+    };
+    const fill = () => {
+      const q = search.value.trim().toLowerCase();
+      const shown = skills.filter((s) => `${s.id} ${s.description}`.toLowerCase().includes(q));
+      const parts: HTMLElement[] = [];
+      for (const [title, inGroup] of SKILL_GROUPS) {
+        const group = shown.filter(inGroup);
+        if (group.length) parts.push(el('h4', undefined, title), ...group.map(row));
+      }
+      list.replaceChildren(...(parts.length ? parts : [el('p', 'hint', 'Nothing matches.')]));
+    };
+    search.oninput = fill;
+    fill();
+    showCount();
+
+    const forNew = el('input');
+    forNew.type = 'checkbox';
+    const newHires = el('label', 'check');
+    newHires.append(forNew, 'Give new hires these skills too');
+    const save = el('button', 'primary', 'Save');
+    save.onclick = () => {
+      const picked = [...chosen];
+      bus.emit('agent:skills', { id: a.id, skills: picked });
+      if (forNew.checked) bus.emit('settings:save', { ...settings, defaultSkills: picked });
+      pop.hidden = true;
+    };
+    close.textContent = 'Cancel';
+    const buttons = el('div', 'buttons');
+    buttons.append(save, close);
+    const foot = el('div', 'row');
+    foot.append(count);
+    body.replaceChildren(search, list, foot, newHires, buttons);
+    search.focus();
+  });
+}
+
 /** Lo-fi music: on/off and volume, remembered between runs. */
 function initMusic() {
   const button = byId('music') as HTMLButtonElement;
@@ -546,7 +630,7 @@ export function initHud() {
   };
 
   /** Built once per selected agent, then updated in place so typing isn't wiped by refreshes. */
-  let panel: { id: string; status: HTMLElement; task: HTMLElement; usage: HTMLElement; decision: HTMLElement; log: HTMLElement; model: HTMLSelectElement; shown: string } | null = null;
+  let panel: { id: string; status: HTMLElement; task: HTMLElement; usage: HTMLElement; decision: HTMLElement; log: HTMLElement; model: HTMLSelectElement; skills: HTMLButtonElement; skillTags: HTMLElement; skillsShown: string; shown: string } | null = null;
 
   const buildInspect = (a: AgentView) => {
     const who = el('div', 'who');
@@ -604,10 +688,18 @@ export function initHud() {
       sure.append(el('span', undefined, `${a.name} stops, packs up and leaves. Their branches stay.`), yes, no);
       controls.replaceWith(sure);
     };
+    const skills = el('button');
+    skills.title = `Choose which skills ${a.name} can use`;
+    skills.hidden = !a.real;
+    skills.onclick = () => {
+      const now = agents.find((x) => x.id === a.id);
+      if (now) pickSkills(now);
+    };
     const buttons = el('div', 'buttons');
-    buttons.append(stop, fire);
+    buttons.append(skills, stop, fire);
     controls.append(label, buttons);
 
+    const skillTags = el('div', 'skill-tags');
     const decisionSlot = el('div');
     const log = el('pre', 'log');
     const chat = el('form', 'chat');
@@ -624,8 +716,8 @@ export function initHud() {
       bus.emit('agent:say', { id: a.id, text: text || 'Have a look at this picture.', pictures: pics.take() });
       input.value = '';
     };
-    inspect.replaceChildren(who, controls, decisionSlot, log, pics.strip, chat);
-    panel = { id: a.id, status, task, usage, decision: decisionSlot, log, model, shown: '' };
+    inspect.replaceChildren(who, controls, skillTags, decisionSlot, log, pics.strip, chat);
+    panel = { id: a.id, status, task, usage, decision: decisionSlot, log, model, skills, skillTags, skillsShown: '', shown: '' };
   };
 
   const renderInspect = () => {
@@ -641,6 +733,20 @@ export function initHud() {
     p.task.textContent = a.task || '—';
     p.usage.textContent = a.usage ? `${tokens(a.usage.tokens)} tokens · ${dollars(a.usage.cost)} at API prices` : '';
     if (document.activeElement !== p.model) p.model.value = a.model;
+    p.skills.textContent = a.skills.length ? `Skills (${a.skills.length})` : 'Skills';
+    if (p.skillsShown !== a.skills.join()) {
+      p.skillsShown = a.skills.join();
+      p.skillTags.replaceChildren(...a.skills.map((id) => {
+        const tag = el('span', 'chip skill-tag', id.split(':').pop());
+        tag.title = id;
+        const remove = el('button', 'x', '×');
+        remove.title = `Take ${id} away from ${a.name}`;
+        remove.setAttribute('aria-label', remove.title);
+        remove.onclick = () => bus.emit('agent:skills', { id: a.id, skills: a.skills.filter((s) => s !== id) });
+        tag.append(remove);
+        return tag;
+      }));
+    }
     const waiting = approvals.some((x) => x.id === a.id);
     if (waiting !== !!p.decision.firstChild) p.decision.replaceChildren(...(waiting ? [decision(a.id)] : []));
     const key = `${a.log.length}|${a.log[a.log.length - 1] ?? ''}`;

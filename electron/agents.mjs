@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import { engine, settings } from './settings.mjs';
+import { catalog, skillPrompt, skillSettings } from './skills.mjs';
 
 const TOOLS = 'Bash,Read,Glob,Grep,Edit,Write,WebSearch,WebFetch';
 /** Approved work happens in git worktrees here, so a project's own checkout is never touched. */
@@ -81,15 +82,21 @@ function slim(m) {
 export function setupAgents(ipcMain, getWindow) {
   const emit = (id, msg) => getWindow()?.webContents.send('agent:msg', id, msg);
 
+  /** How to run an engine, and where to look when asking it about itself. */
+  function launchOf(eng) {
+    const cmd = resolveCommand(eng.command);
+    const root = settings().projectsRoot;
+    return { file: cmd.file, pre: cmd.pre, env: { ...process.env, ...GIT_ENV, ...cmd.env, ...eng.env }, cwd: existsSync(root) ? root : os.homedir() };
+  }
+
   /** (Re)start an agent's Claude Code session. */
-  function start(id, { cwd, model, system, prompt, mode, engine: engineId, resume }) {
+  async function start(id, { cwd, model, system, prompt, mode, engine: engineId, resume, skills }) {
     const eng = engine(engineId);
     stop(id);
     const args = [
       '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
       '--permission-prompt-tool', 'stdio', '--permission-mode', mode || 'default',
-      '--tools', TOOLS, '--strict-mcp-config',
-      '--append-system-prompt', system,
+      '--strict-mcp-config',
     ];
     if (model) args.push('--model', model);
     // pick last time's conversation back up, so they remember what was said and done
@@ -100,10 +107,34 @@ export function setupAgents(ipcMain, getWindow) {
       queueMicrotask(() => emit(id, { kind: 'exit', code: -1, error: `The folder ${dir} doesn't exist. Pick your projects folder in Start > Settings.` }));
       return;
     }
-    const cmd = resolveCommand(eng.command);
-    const p = spawn(cmd.file, [...cmd.pre, ...args], { cwd: dir, env: { ...process.env, ...GIT_ENV, ...cmd.env, ...eng.env }, windowsHide: true });
-    const entry = { p, closed: false };
+    // messages sent while the skills are being looked up wait here until the process exists
+    const entry = { p: null, closed: false, pending: [] };
     procs.set(id, entry);
+    send(id, prompt);
+    let tools = TOOLS;
+    let brief = system;
+    if (skills?.length) {
+      try {
+        const { all } = await catalog(eng.id, launchOf(eng));
+        if (entry.closed) return;
+        const picked = skills.filter((s) => all.includes(s));
+        const gone = skills.filter((s) => !all.includes(s));
+        if (gone.length) emit(id, { kind: 'note', text: `Skills no longer installed: ${gone.join(', ')}` });
+        if (picked.length) {
+          tools = `${TOOLS},Skill`;
+          brief = `${system}\n\n${skillPrompt(picked)}`;
+          args.push('--settings', JSON.stringify(skillSettings(all, picked)));
+        }
+      } catch (e) {
+        if (entry.closed) return;
+        // can't tell which skills to hide, so they get none rather than all of them
+        emit(id, { kind: 'note', text: `Couldn't load their skills, working without them this time: ${e.message}` });
+      }
+    }
+    args.push('--tools', tools, '--append-system-prompt', brief);
+    const launch = launchOf(eng);
+    const p = spawn(launch.file, [...launch.pre, ...args], { cwd: dir, env: launch.env, windowsHide: true });
+    entry.p = p;
     readline.createInterface({ input: p.stdout }).on('line', (line) => {
       let m;
       try {
@@ -121,12 +152,15 @@ export function setupAgents(ipcMain, getWindow) {
       if (procs.get(id) === entry) procs.delete(id);
       if (!entry.closed) emit(id, { kind: 'exit', code, error: code ? err.trim().split('\n').pop() : '' });
     });
-    send(id, prompt);
+    for (const line of entry.pending.splice(0)) p.stdin.write(line);
   }
 
   function write(id, obj) {
     const e = procs.get(id);
-    if (e && !e.p.stdin.destroyed) e.p.stdin.write(JSON.stringify(obj) + '\n');
+    if (!e) return;
+    const line = JSON.stringify(obj) + '\n';
+    if (!e.p) e.pending.push(line);
+    else if (!e.p.stdin.destroyed) e.p.stdin.write(line);
   }
 
   function send(id, text) {
@@ -138,7 +172,7 @@ export function setupAgents(ipcMain, getWindow) {
     if (!e) return;
     e.closed = true;
     procs.delete(id);
-    e.p.kill();
+    e.p?.kill();
   }
 
   /**
@@ -184,6 +218,14 @@ export function setupAgents(ipcMain, getWindow) {
       response: { subtype: 'success', request_id: requestId, response: allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: message || 'Denied' } },
     }));
   ipcMain.handle('work:prepare', (_e, req) => prepareWork(req));
+  ipcMain.handle('skills:list', async (_e, engineId) => {
+    const eng = engine(engineId);
+    try {
+      return { skills: (await catalog(eng.id, launchOf(eng), { fresh: true })).skills };
+    } catch (e) {
+      return { skills: [], error: e.message };
+    }
+  });
 
   return { stopAll: () => [...procs.keys()].forEach(stop) };
 }

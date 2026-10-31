@@ -219,6 +219,10 @@ export class OfficeScene extends Phaser.Scene {
       this.crew.setModel(id, model);
       this.dirty = true;
     });
+    bus.on('agent:skills', ({ id, skills }: { id: string; skills: string[] }) => {
+      this.crew.setSkills(id, skills);
+      this.dirty = true;
+    });
     bus.on('agent:stop', (id: string) => this.crew.interrupt(id));
     bus.on('agent:engine', ({ id, engine }: { id: string; engine: string }) => {
       this.crew.setEngine(id, engine);
@@ -776,6 +780,7 @@ export class OfficeScene extends Phaser.Scene {
       avatar: this.avatar(a.tex),
       log: a.log,
       model: this.crew.modelOf(a.id),
+      skills: this.crew.skillsOf(a.id),
       usage: this.crew.usageOf(a.id),
       status: this.crew.statusOf(a.id),
       ...this.roleOf(a.id),

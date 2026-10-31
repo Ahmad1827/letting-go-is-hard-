@@ -70,6 +70,13 @@ export class Sim implements Crew {
     return this.models.get(agentId) ?? '';
   }
 
+  /** Simulated staff don't run anything, so there are no skills to give them. */
+  setSkills() {}
+
+  skillsOf() {
+    return [];
+  }
+
   usageOf() {
     return null;
   }

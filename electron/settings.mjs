@@ -30,6 +30,8 @@ const DEFAULTS = {
   engines: [BUILT_IN],
   defaultEngine: 'claude-code',
   defaultModel: '',
+  /** Skills new hires start with. */
+  defaultSkills: [],
   /** 'auto': Claude Code's auto mode decides what's safe; 'ask': anything that changes files asks first. */
   approvals: 'auto',
   /** On closing with work in progress: 'ask', 'finish' in the background, or 'stop'. */

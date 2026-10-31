@@ -95,10 +95,22 @@ export interface Settings {
   engines: EngineConfig[];
   defaultEngine: string;
   defaultModel: string;
+  /** Skills new hires start with. */
+  defaultSkills: string[];
   /** 'auto': the engine's auto mode decides what's safe; 'ask': anything that changes files asks first. */
   approvals: 'auto' | 'ask';
   /** On closing with work in progress. */
   onClose: 'ask' | 'finish' | 'stop';
+}
+
+/** A skill installed in an engine, on offer to the staff. */
+export interface SkillInfo {
+  /** What the agent calls it by, e.g. anthropic-skills:pdf. */
+  id: string;
+  name: string;
+  description: string;
+  /** Where it came from: user, claude.ai sync, project, or empty for a plugin. */
+  source: string;
 }
 
 /** Where an agent is in its cycle, for the work board. */

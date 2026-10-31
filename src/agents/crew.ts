@@ -13,6 +13,8 @@ export interface StaffSave {
   name: string;
   engine: string;
   model: string;
+  /** The skills picked for them; none if they were saved before skills existed. */
+  skills?: string[];
   usage: AgentUsage;
   seen: string[];
   phase: Phase;
@@ -78,6 +80,9 @@ export interface Crew {
   say(agentId: string, text: string, pictures?: Picture[]): void;
   setModel(agentId: string, model: string): void;
   modelOf(agentId: string): string;
+  /** Choose which installed skills this agent may use. */
+  setSkills(agentId: string, skills: string[]): void;
+  skillsOf(agentId: string): string[];
   /** Null for simulated agents, which use nothing. */
   usageOf(agentId: string): AgentUsage | null;
   setEngine(agentId: string, engine: string): void;
@@ -115,6 +120,7 @@ export const DEFAULT_SETTINGS: Settings = {
   engines: [{ id: 'claude-code', name: 'Claude Code', command: 'claude', env: {}, models: CLAUDE_MODELS }],
   defaultEngine: 'claude-code',
   defaultModel: '',
+  defaultSkills: [],
   approvals: 'auto',
   onClose: 'ask',
 };
