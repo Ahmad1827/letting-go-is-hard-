@@ -98,6 +98,16 @@ a held manager) wait until they're back. Holds survive closing the app.
 Click an agent to see their full log, switch their model (Fable 5.1, Opus 5.5, Sonnet 5.5,
 Haiku 5.5, older versions, or Claude Code's default), stop them, message them, or fire them.
 
+**Terminals:** click a character (or the `>_` next to them in Staff) to open their terminal,
+which looks and works like Claude Code: their replies, tool calls and results scroll by, you
+type at the `❯` prompt (Enter sends, Shift+Enter for a new line, Esc interrupts, ↑ for
+earlier messages, Ctrl+V for pictures), and permission questions are answered right there
+with 1 or 2. `/help` lists the commands (`/clear`, `/stop`, `/hold`, `/reopen`, `/model`).
+Click a team's name in Staff (or its `>_ Team`) for the team's terminal: everyone's lines
+together, tagged by name. Messages go to the manager; start with `@Name` for one person or
+`@all` for everyone. Windows can be dragged, resized and minimized, and the history is kept
+between runs.
+
 **Skills** (the Skills button on an agent): tick which of the Claude Code skills installed on
 your machine that agent can use, or tick "Give new hires these skills too" to make them the
 default. Their skills show as tags on the agent's panel; click a tag's × to take one away.

@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentStatus, Decision, Idea, Phase, Picture, ProjectInfo, Settings, Team } from './types';
+import type { AgentEvent, AgentStatus, Decision, Idea, Phase, Picture, ProjectInfo, Settings, Team, TermLine } from './types';
 
 /** One of the plan's usage windows, as Claude Code reports it. */
 export interface UsageWindow { utilization: number; resetsAt: number }
@@ -41,7 +41,10 @@ export interface CrewSave { staff: StaffSave[]; teams: TeamSave[] }
 /** What the office needs to hear from whoever runs the agents. */
 export interface CrewHooks {
   emit(ev: AgentEvent): void;
-  note(agentId: string, text: string): void;
+  /** A line for the agent's log. It shows in their terminal too: as `line` if given, as a dim note if not, nowhere if null. */
+  note(agentId: string, text: string, line?: TermLine | null): void;
+  /** A line for the agent's terminal only. */
+  term(agentId: string, line: TermLine): void;
   /** The agent at the front of the line has reached the office (or null once it's decided). */
   pitch(agentId: string | null, idea: Idea | null): void;
   /** Everyone waiting to pitch, front of the line first. */

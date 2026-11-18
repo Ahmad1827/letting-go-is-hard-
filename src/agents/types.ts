@@ -124,3 +124,19 @@ export interface AgentStatus {
   branch: string | null;
   engine: string;
 }
+
+/** One line of an agent's terminal, shown the way Claude Code shows it. */
+export type TermLine =
+  /** A message to them: from the owner, or from a teammate (`from`). */
+  | { k: 'user'; text: string; from?: string; pics?: number }
+  /** What they said. */
+  | { k: 'text'; text: string }
+  /** A tool call, e.g. Read(src/main.ts). */
+  | { k: 'tool'; name: string; arg: string }
+  /** What the tool gave back. */
+  | { k: 'out'; text: string; error?: boolean }
+  /** Something the office noticed: joined a team, approved, stopped... */
+  | { k: 'note'; text: string };
+
+/** A terminal line with its place in the office-wide order (n) and time (t, ms). */
+export type TermEntry = TermLine & { n: number; t: number };

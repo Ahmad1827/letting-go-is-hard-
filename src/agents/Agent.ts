@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { findPath, randomNear, TILE, type Desk, type Facing, type Spot, type Tile } from '../world/map';
 import { FEET_Y, FRAME_H } from '../art/people';
-import type { AgentActivity } from './types';
+import type { AgentActivity, TermEntry } from './types';
 
 const SPEED = 120; // px per second
 const centerX = (t: Tile) => t.x * TILE + TILE / 2;
@@ -19,6 +19,8 @@ export class Agent {
   detail = '';
   task = '';
   log: string[] = [];
+  /** What their terminal shows. */
+  term: TermEntry[] = [];
   tile: Tile;
 
   private path: Tile[] = [];

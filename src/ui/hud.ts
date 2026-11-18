@@ -1,11 +1,12 @@
 import { bus } from '../bus';
 import { DEFAULT_SETTINGS, engineIn, type AgentUsage, type Limits } from '../agents/crew';
-import type { AgentActivity, AgentStatus, Decision, Idea, Role, Settings, SkillInfo, Team } from '../agents/types';
+import type { AgentActivity, AgentStatus, Decision, Idea, Role, Settings, SkillInfo, Team, TermEntry } from '../agents/types';
 import { Lofi } from '../audio/lofi';
 import { OWNER } from '../owner';
 import { byId, el } from './dom';
 import { badge, initPanels, panels } from './panels';
 import { acceptPictures } from './paste';
+import { initTerminals } from './terminal';
 import { initWindows } from './windows';
 
 export interface AgentView {
@@ -16,6 +17,8 @@ export interface AgentView {
   task: string;
   avatar: string;
   log: string[];
+  /** Their terminal: messages, tool calls and results. */
+  term: TermEntry[];
   model: string;
   /** The skills picked for them. */
   skills: string[];
@@ -63,6 +66,17 @@ export const DOT: Record<AgentActivity, string> = {
   standby: '#7a7aa0',
 };
 
+
+/** A small >_ button that opens someone's (or a team's) terminal. */
+export function termButton(event: 'term:open' | 'term:team', id: string, title: string, label = '') {
+  const b = el('button', 'small term-btn', `>_${label}`);
+  b.title = title;
+  b.onclick = (e) => {
+    e.stopPropagation();
+    bus.emit(event, id);
+  };
+  return b;
+}
 
 let audio: AudioContext | null = null;
 
@@ -541,6 +555,7 @@ export function initHud() {
   initOffice();
   initUsage();
   initTeams();
+  initTerminals();
   const list = byId('agent-list');
   const requests = byId('requests');
   const inspect = byId('inspect');
@@ -572,7 +587,7 @@ export function initHud() {
     dot.style.background = DOT[a.activity];
     li.append(dot, el('b', undefined, a.name));
     if (role) li.append(el('span', `role ${role}`, role === 'manager' ? 'Manager' : 'Worker'));
-    li.append(el('span', 'status', LABEL[a.activity]));
+    li.append(el('span', 'status', LABEL[a.activity]), termButton('term:open', a.id, `Open ${a.name}'s terminal`));
     li.onclick = () => {
       bus.emit('select', a.id);
       bus.emit('focus', a.id);
@@ -595,7 +610,11 @@ export function initHud() {
         e.stopPropagation();
         bus.emit('team:disband', t.id);
       };
-      head.append(el('b', undefined, t.name), disband);
+      head.title = `Open ${t.name}'s terminal: talk to the whole team`;
+      head.onclick = () => bus.emit('term:team', t.id);
+      const right = el('span', 'buttons');
+      right.append(termButton('term:team', t.id, head.title, ' Team'), disband);
+      head.append(el('b', undefined, t.name), right);
       rows.push(head);
       for (const [id, role] of [[t.manager, 'manager'], ...t.workers.map((w) => [w, 'worker'])] as [string, Role][]) {
         const a = views.get(id);
@@ -695,8 +714,11 @@ export function initHud() {
       const now = agents.find((x) => x.id === a.id);
       if (now) pickSkills(now);
     };
+    const terminal = el('button', undefined, '>_ Terminal');
+    terminal.title = `Talk to ${a.name} in a terminal`;
+    terminal.onclick = () => bus.emit('term:open', a.id);
     const buttons = el('div', 'buttons');
-    buttons.append(skills, stop, fire);
+    buttons.append(terminal, skills, stop, fire);
     controls.append(label, buttons);
 
     const skillTags = el('div', 'skill-tags');
@@ -768,11 +790,11 @@ export function initHud() {
     renderRequests();
     renderInspect();
   });
-  bus.on('select', (id: string) => {
+  bus.on('select', (id: string, openPanel = true) => {
     selected = id;
     renderList();
     renderInspect();
-    panels.open('agent');
+    if (openPanel) panels.open('agent');
   });
   bus.on('shipped', (n: number) => (shipped.textContent = `Shipped: ${n}`));
   bus.on('hire:full', () => {

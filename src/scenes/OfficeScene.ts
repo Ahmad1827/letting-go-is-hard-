@@ -8,7 +8,7 @@ import { Agent } from '../agents/Agent';
 import { DEFAULT_SETTINGS, type Crew, type CrewHooks, type CrewSave } from '../agents/crew';
 import { RealCrew, type AgentBridge } from '../agents/real';
 import { Sim } from '../agents/sim';
-import type { AgentEvent, Decision, Idea, Picture, ProjectInfo, Settings, Team } from '../agents/types';
+import type { AgentEvent, Decision, Idea, Picture, ProjectInfo, Settings, Team, TermEntry, TermLine } from '../agents/types';
 import type { AgentView, ApprovalView, PitchView } from '../ui/hud';
 import {
   BAND_ROWS, BOSS_MONITOR, COLS, ELEVATORS, HEIGHT, OUTBOX, ROWS, TILE, WIDTH, desks, props, rooms, spots, walls,
@@ -35,13 +35,21 @@ interface OfficeBridge {
 interface OfficeSave {
   v: 1;
   shipped: number;
-  agents: { id: string; name: string; cast: number; desk: number; log: string[] }[];
+  agents: { id: string; name: string; cast: number; desk: number; log: string[]; term?: TermEntry[] }[];
   crew: CrewSave;
 }
 
 const SAVE_KEY = 'lgih.office';
+
+/** Keys typed into a text box are for the text box, not the camera. */
+const typing = () => {
+  const f = document.activeElement;
+  return f instanceof HTMLInputElement || f instanceof HTMLTextAreaElement || f instanceof HTMLSelectElement;
+};
 /** Log lines kept per person, on screen and between runs. */
 const LOG_LINES = 2000;
+/** Terminal lines kept per person. */
+const TERM_LINES = 800;
 
 /** Merge tiles into rectangles [x, y, w, h]: runs along each row, stacked where rows match. */
 function mergeTiles(tiles: [number, number][]): [number, number, number, number][] {
@@ -119,6 +127,8 @@ export class OfficeScene extends Phaser.Scene {
   private doors: [Phaser.GameObjects.Image, Phaser.GameObjects.Image][] = [];
   private ring!: Phaser.GameObjects.Image;
   private pending = new Map<string, string>();
+  /** Order of terminal lines across the whole office, so a team's terminals interleave correctly. */
+  private termN = 0;
   private papers: Phaser.GameObjects.Image[] = [];
   private shipped = 0;
   private selected: string | null = null;
@@ -158,7 +168,8 @@ export class OfficeScene extends Phaser.Scene {
 
     const hooks: CrewHooks = {
       emit: (ev) => this.apply(ev),
-      note: (id, text) => this.note(id, text),
+      note: (id, text, line) => this.note(id, text, line),
+      term: (id, line) => this.term(id, line),
       pitch: (id, idea) => this.showPitch(id, idea),
       queue: (ids) => bus.emit('queue', ids.map((id) => this.agents.get(id)?.name ?? id)),
       limits: (l) => bus.emit('usage:limits', l),
@@ -193,7 +204,10 @@ export class OfficeScene extends Phaser.Scene {
 
     this.input.on('gameobjectdown', (_p: Phaser.Input.Pointer, obj: Phaser.GameObjects.GameObject) => {
       const id = obj.getData('agent') as string | undefined;
-      if (id) bus.emit('select', id);
+      if (!id) return;
+      // clicking someone opens their terminal
+      bus.emit('select', id, false);
+      bus.emit('term:open', id);
     });
     bus.on('select', (id: string) => (this.selected = id));
     bus.on('focus', (id: string) => {
@@ -278,7 +292,7 @@ export class OfficeScene extends Phaser.Scene {
       w: kb.addKey('W', false), a: kb.addKey('A', false), s: kb.addKey('S', false), d: kb.addKey('D', false),
     };
     kb.on('keydown', (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement) return;
+      if (typing()) return;
       if (e.key === '+' || e.key === '=') this.zoomStep(1);
       if (e.key === '-' || e.key === '_') this.zoomStep(-1);
       if (e.key === '0' || e.key === 'f') this.zoomTo(this.fitZoom());
@@ -322,6 +336,7 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   private panWithKeys(delta: number) {
+    if (typing()) return;
     const k = this.keys, cam = this.cameras.main;
     const dx = (k.right.isDown || k.d.isDown ? 1 : 0) - (k.left.isDown || k.a.isDown ? 1 : 0);
     const dy = (k.down.isDown || k.s.isDown ? 1 : 0) - (k.up.isDown || k.w.isDown ? 1 : 0);
@@ -569,6 +584,8 @@ export class OfficeScene extends Phaser.Scene {
       const a = new Agent(this, saved.id, saved.name, `person${saved.cast}`, desk, desk.seat);
       a.goTo(desk.seat);
       a.log = [...saved.log];
+      a.term = [...(saved.term ?? [])];
+      for (const e of a.term) this.termN = Math.max(this.termN, e.n + 1);
       this.agents.set(saved.id, a);
       placed.add(saved.id);
     }
@@ -604,7 +621,7 @@ export class OfficeScene extends Phaser.Scene {
     const data: OfficeSave = {
       v: 1,
       shipped: this.shipped,
-      agents: [...this.agents.values()].map((a) => ({ id: a.id, name: a.name, cast: castOf(a.tex), desk: a.desk.id, log: a.log.slice(-LOG_LINES) })),
+      agents: [...this.agents.values()].map((a) => ({ id: a.id, name: a.name, cast: castOf(a.tex), desk: a.desk.id, log: a.log.slice(-LOG_LINES), term: a.term.slice(-TERM_LINES) })),
       crew: this.crew.snapshot(),
     };
     const memory = this.office()?.memory;
@@ -752,12 +769,21 @@ export class OfficeScene extends Phaser.Scene {
     bus.emit('pitch', view);
   }
 
-  private note(id: string, text: string) {
+  private note(id: string, text: string, line?: TermLine | null) {
     const a = this.agents.get(id);
     if (!a) return;
     const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     a.log.push(`${t}  ${text}`);
     if (a.log.length > LOG_LINES) a.log.shift();
+    if (line !== null) this.term(id, line ?? { k: 'note', text });
+    this.dirty = true;
+  }
+
+  private term(id: string, line: TermLine) {
+    const a = this.agents.get(id);
+    if (!a) return;
+    a.term.push({ ...line, n: this.termN++, t: Date.now() });
+    if (a.term.length > TERM_LINES) a.term.shift();
     this.dirty = true;
   }
 
@@ -779,6 +805,7 @@ export class OfficeScene extends Phaser.Scene {
       task: a.task,
       avatar: this.avatar(a.tex),
       log: a.log,
+      term: a.term,
       model: this.crew.modelOf(a.id),
       skills: this.crew.skillsOf(a.id),
       usage: this.crew.usageOf(a.id),

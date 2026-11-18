@@ -3,7 +3,7 @@ import { DEFAULT_SETTINGS, engineIn, modelLabel } from '../agents/crew';
 import type { EngineConfig, Phase, Settings, Team } from '../agents/types';
 import { OWNER } from '../owner';
 import { byId, el } from './dom';
-import { DOT, LABEL, type AgentView } from './hud';
+import { DOT, LABEL, termButton, type AgentView } from './hud';
 
 /**
  * The bigger windows: Settings (AI engines and how agents behave) and the
@@ -297,7 +297,7 @@ function initBoard() {
       const job = manager?.status.phase === 'work' ? manager.task : manager?.status.phase === 'research' ? 'looking for an idea' : '';
       const legend = el('legend', undefined, `${t.name}${job ? ` · ${job}` : ''}`);
       const allHeld = [t.manager, ...t.workers].every((id) => byId.get(id)?.status.phase === 'held');
-      legend.append(holdButton('team:hold', t.id, allHeld, ' team'));
+      legend.append(termButton('term:team', t.id, `Open ${t.name}'s terminal`, ' Team'), holdButton('team:hold', t.id, allHeld, ' team'));
       box.append(legend);
       for (const id of [t.manager, ...t.workers]) {
         const a = byId.get(id);

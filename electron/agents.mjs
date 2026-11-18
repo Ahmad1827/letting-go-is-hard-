@@ -55,6 +55,14 @@ function resolveCommand(command) {
   return { file: command, pre: [], env: {} };
 }
 
+/** A tool result as plain text, cut short: the terminal only shows the first few lines. */
+function resultText(content) {
+  const text = typeof content === 'string' ? content
+    : Array.isArray(content) ? content.map((c) => (c.type === 'text' ? c.text : c.type === 'image' ? '[image]' : '')).join('\n')
+    : '';
+  return text.length > 4000 ? text.slice(0, 4000) : text;
+}
+
 /** Keep only what the office needs from each stream-json event. */
 function slim(m) {
   if (m.type === 'system' && m.subtype === 'init') return { kind: 'init', model: m.model, cwd: m.cwd, session: m.session_id };
@@ -62,9 +70,16 @@ function slim(m) {
     const parts = [];
     for (const c of m.message.content) {
       if (c.type === 'text' && c.text.trim()) parts.push({ type: 'text', text: c.text });
-      if (c.type === 'tool_use') parts.push({ type: 'tool', name: c.name, input: c.input });
+      if (c.type === 'tool_use') parts.push({ type: 'tool', id: c.id, name: c.name, input: c.input });
     }
     return parts.length ? { kind: 'assistant', model: m.message.model, parts } : null;
+  }
+  // what each tool call gave back, for the agent's terminal
+  if (m.type === 'user' && Array.isArray(m.message?.content)) {
+    const results = m.message.content
+      .filter((c) => c.type === 'tool_result')
+      .map((c) => ({ id: c.tool_use_id, error: !!c.is_error, text: resultText(c.content) }));
+    return results.length ? { kind: 'results', results } : null;
   }
   if (m.type === 'control_request' && m.request?.subtype === 'can_use_tool')
     return { kind: 'permission', requestId: m.request_id, tool: m.request.tool_name, input: m.request.input, description: m.request.description ?? '' };

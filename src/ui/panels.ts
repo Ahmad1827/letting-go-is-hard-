@@ -218,8 +218,13 @@ function put(name: PanelName) {
 }
 
 function front(name: PanelName) {
-  win(name).style.zIndex = String(++top);
-  for (const n of NAMES) win(n).classList.toggle('front', n === name);
+  raise(win(name));
+}
+
+/** Bring a floating window (a panel or a terminal) in front of the others. */
+export function raise(el: HTMLElement) {
+  el.style.zIndex = String(++top);
+  for (const w of document.querySelectorAll<HTMLElement>('.panel, .term-win')) w.classList.toggle('front', w === el);
 }
 
 const isFront = (name: PanelName) => win(name).classList.contains('front');

@@ -58,7 +58,7 @@ export class Sim implements Crew {
 
   say(agentId: string, text: string, pictures: Picture[] = []) {
     if (this.runs.get(agentId)?.pitched) return this.decide(agentId, { kind: 'instead', text, pictures });
-    this.note(agentId, `${OWNER}: ${text}${pictures.length ? ` [${pictures.length} picture(s)]` : ''}`);
+    this.hooks.note(agentId, `${OWNER}: ${text}${pictures.length ? ` [${pictures.length} picture(s)]` : ''}`, { k: 'user', text, pics: pictures.length });
     this.clock.delayedCall(800, () => this.note(agentId, "(Simulated agents can't chat. Open the desktop app for real ones.)"));
   }
 

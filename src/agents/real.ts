@@ -1,7 +1,7 @@
 import { OWNER } from '../owner';
 import { DEFAULT_SETTINGS, engineIn, teamId, type AgentUsage, type Crew, type CrewHooks, type CrewSave, type UsageWindow } from './crew';
 import { branchFor } from './ideas';
-import type { AgentActivity, AgentStatus, Decision, Idea, Phase, Picture, ProjectInfo, Role, Settings, Team } from './types';
+import type { AgentActivity, AgentStatus, Decision, Idea, Phase, Picture, ProjectInfo, Role, Settings, Team, TermLine } from './types';
 
 /**
  * Real agents: each employee is a headless Claude Code session started by the
@@ -15,7 +15,8 @@ import type { AgentActivity, AgentStatus, Decision, Idea, Phase, Picture, Projec
 
 type Msg =
   | { kind: 'init'; model: string; cwd: string; session?: string }
-  | { kind: 'assistant'; model: string; parts: ({ type: 'text'; text: string } | { type: 'tool'; name: string; input: Record<string, unknown> })[] }
+  | { kind: 'assistant'; model: string; parts: ({ type: 'text'; text: string } | { type: 'tool'; id: string; name: string; input: Record<string, unknown> })[] }
+  | { kind: 'results'; results: { id: string; error: boolean; text: string }[] }
   | { kind: 'permission'; requestId: string; tool: string; input: Record<string, unknown>; description: string }
   | { kind: 'result'; ok: boolean; text: string; cost: number; tokens: number }
   | { kind: 'limits'; status?: string; windows: Record<string, UsageWindow> }
@@ -93,6 +94,8 @@ interface Staff {
   held: Phase | null;
   /** Messages for them that came in while on hold, delivered when they're back. */
   inbox: string[];
+  /** Tool calls in flight, by id, so their results can be summed up the way the tool would. */
+  tools: Map<string, string>;
 }
 
 interface TeamState extends Team {
@@ -184,7 +187,7 @@ export class RealCrew implements Crew {
       name, phase: 'research', since: Date.now(), engine: this.settings.defaultEngine, model: this.settings.defaultModel, skills: [...(this.settings.defaultSkills ?? [])], workCwd: null, workMode: 'default', idea: null, seen: new Set(), alive: false, nudged: false, permissions: [], place: 0,
       pitched: false, orders: null, ordersPictures: [], team: null, role: null, assignment: null, desk: null,
       activity: 'idle', lastShown: 0, usage: { tokens: 0, cost: 0 }, sessionCost: 0,
-      session: null, launchCwd: '', resumeNext: false, retry: null, held: null, inbox: [],
+      session: null, launchCwd: '', resumeNext: false, retry: null, held: null, inbox: [], tools: new Map(),
     };
   }
 
@@ -364,7 +367,7 @@ export class RealCrew implements Crew {
       this.note(agentId, `${OWNER} passed on "${idea.title}"`);
       this.backToResearch(agentId, `${OWNER} passed on that idea. Pitch a different one, maybe in another project.`);
     } else {
-      this.note(agentId, `${OWNER}: not that. ${d.text}${pictureNote(d.pictures)}`);
+      this.note(agentId, `${OWNER}: not that. ${d.text}${pictureNote(d.pictures)}`, { k: 'user', text: `Not that. ${d.text}`, pics: d.pictures?.length });
       s.orders = d.text;
       s.ordersPictures = d.pictures ?? [];
       this.backToResearch(agentId, content(ORDERS_PROMPT(d.text, s.role === 'manager'), s.ordersPictures));
@@ -377,11 +380,12 @@ export class RealCrew implements Crew {
     // talking to someone mid-pitch means "not that, do this instead"
     if (s.pitched) return this.decide(agentId, { kind: 'instead', text, pictures });
     if (s.held) {
-      this.note(agentId, `${OWNER}: ${text} (on hold; they'll get this when reopened)`);
+      this.note(agentId, `${OWNER}: ${text} (on hold; they'll get this when reopened)`, { k: 'user', text });
+      this.hooks.term(agentId, { k: 'note', text: "On hold: they'll get this when reopened" });
       s.inbox.push(text);
       return;
     }
-    this.note(agentId, `${OWNER}: ${text}${pictureNote(pictures)}`);
+    this.note(agentId, `${OWNER}: ${text}${pictureNote(pictures)}`, { k: 'user', text, pics: pictures.length });
     const message = content(text, pictures);
     if (s.phase === 'break') {
       // still chatting about the finished work: keep that session
@@ -670,7 +674,7 @@ export class RealCrew implements Crew {
     const w = this.staff.get(workerId)!;
     const job = team.job;
     if (!job) return;
-    this.note(workerId, `Task from ${this.nameOf(team.manager)}: ${task}`);
+    this.note(workerId, `Task from ${this.nameOf(team.manager)}: ${task}`, { k: 'user', from: this.nameOf(team.manager), text: task });
     this.note(team.manager, `Assigned ${w.name}: ${short(task)}`);
     if (w.held) {
       // kept for when they're reopened
@@ -771,7 +775,7 @@ export class RealCrew implements Crew {
         for (const part of msg.parts) {
           if (part.type === 'text') {
             const shown = part.text.replace(PITCH, '').replace(ASSIGN, '').trim();
-            if (shown) this.note(agentId, `${s.name}: ${shown}`);
+            if (shown) this.note(agentId, `${s.name}: ${shown}`, { k: 'text', text: shown });
             const idea = this.parsePitch(s, part.text);
             if (idea && (s.phase === 'research' || s.phase === 'queued')) {
               s.idea = idea;
@@ -782,7 +786,8 @@ export class RealCrew implements Crew {
             if (busy) this.show(agentId, 'thinking');
           } else {
             const [activity, text] = describe(part.name, part.input, this.root());
-            this.note(agentId, text);
+            s.tools.set(part.id, part.name);
+            this.note(agentId, text, { k: 'tool', name: part.name, arg: toolArg(part.name, part.input, this.root()) });
             if (busy) this.show(agentId, activity);
           }
         }
@@ -808,6 +813,13 @@ export class RealCrew implements Crew {
         }
         break;
       }
+      case 'results':
+        for (const r of msg.results) {
+          const tool = s.tools.get(r.id) ?? '';
+          s.tools.delete(r.id);
+          this.hooks.term(agentId, { k: 'out', text: resultSummary(tool, r.text, r.error), error: r.error });
+        }
+        break;
       case 'note':
         this.note(agentId, msg.text);
         break;
@@ -874,7 +886,7 @@ export class RealCrew implements Crew {
       const manager = this.staff.get(team.manager);
       if (manager?.held) manager.inbox.push(report);
       else this.bridge.send(team.manager, report);
-      this.note(team.manager, `${s.name} reported back`);
+      this.note(team.manager, `${s.name} reported back`, { k: 'user', from: s.name, text: msg.text || `Finished "${short(done, 200)}"` });
       this.note(agentId, `Reported to ${this.nameOf(team.manager)}`);
       this.standby(agentId);
     } else if (team && s.role === 'manager') {
@@ -970,8 +982,8 @@ export class RealCrew implements Crew {
     this.hooks.emit({ agentId, activity, detail, task: s.idea?.title });
   }
 
-  private note(agentId: string, text: string) {
-    this.hooks.note(agentId, text);
+  private note(agentId: string, text: string, line?: TermLine | null) {
+    this.hooks.note(agentId, text, line);
   }
 }
 
@@ -1024,6 +1036,31 @@ function describe(tool: string, input: Record<string, unknown>, root: string): [
     case 'Skill': return ['reading', `Use the ${input.skill} skill`];
     default: return ['thinking', tool];
   }
+}
+
+/** What goes in the brackets of a tool call in the terminal, e.g. Read(src/main.ts). */
+function toolArg(tool: string, input: Record<string, unknown>, root: string) {
+  switch (tool) {
+    case 'Read': case 'Edit': case 'Write': return rel(input.file_path, root);
+    case 'Bash': return short(String(input.command ?? ''), 200);
+    case 'Glob': return String(input.pattern ?? '');
+    case 'Grep': return `"${short(String(input.pattern ?? ''), 80)}"${input.path ? `, ${rel(input.path, root)}` : ''}`;
+    case 'WebSearch': return String(input.query ?? '');
+    case 'WebFetch': return String(input.url ?? '');
+    case 'Skill': return String(input.skill ?? '');
+    default: return short(JSON.stringify(input), 120);
+  }
+}
+
+/** A tool's result the way Claude Code sums it up: "Read 120 lines" rather than the whole file. */
+function resultSummary(tool: string, text: string, error: boolean) {
+  const lines = text.split('\n').filter((l) => l.trim()).length;
+  if (error) return text.trim() || 'Error';
+  if (tool === 'Read') return `Read ${lines} line${lines === 1 ? '' : 's'}`;
+  if (tool === 'Glob') return /^No files found/.test(text) ? 'No files found' : `Found ${lines} file${lines === 1 ? '' : 's'}`;
+  if (tool === 'Grep') return /^No (files|matches) found/.test(text) ? 'No matches' : `Found ${lines} line${lines === 1 ? '' : 's'}`;
+  if (tool === 'WebFetch') return `Fetched ${text.length} characters`;
+  return text.trim() || '(No output)';
 }
 
 function permissionText(tool: string, input: Record<string, unknown>, root: string) {
