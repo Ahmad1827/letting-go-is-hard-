@@ -44,6 +44,8 @@ function remember() {
   }
 }
 
+const shortTokens = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : `${n}`);
+
 const viewOf = (id: string) => agents.find((a) => a.id === id);
 
 /** Text with the bits of markdown agents use: code blocks, `code`, **bold**, headings. */
@@ -408,7 +410,10 @@ class Term {
     const frame = SPIN[Math.floor(Date.now() / 120) % SPIN.length];
     const what = this.teamId ? busy.map((v) => `${v.name} ${VERB[v.activity]!.toLowerCase()}`).join(', ') : VERB[busy[0].activity];
     this.status.className = 'term-status';
-    this.status.replaceChildren(el('span', 't-spin', frame), el('span', 't-verb', ` ${what}…`), el('span', 'dim', ` (${secs}s · esc to interrupt)`));
+    // this turn's tokens so far, climbing as they work
+    const turn = busy.reduce((n, v) => n + (v.usage?.turn ?? 0), 0);
+    const used = turn ? ` · ${shortTokens(turn)} tokens` : '';
+    this.status.replaceChildren(el('span', 't-spin', frame), el('span', 't-verb', ` ${what}…`), el('span', 'dim', ` (${secs}s${used} · esc to interrupt)`));
   }
 
   /** The first permission question from anyone here, Claude Code style. */

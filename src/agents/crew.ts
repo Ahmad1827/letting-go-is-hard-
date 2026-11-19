@@ -5,7 +5,12 @@ export interface UsageWindow { utilization: number; resetsAt: number }
 /** The plan's usage windows (e.g. five_hour, seven_day) and when they were last reported. */
 export interface Limits { status?: string; windows: Record<string, UsageWindow>; at: number }
 /** What one agent has used so far: tokens, and what that would cost at API prices. */
-export interface AgentUsage { tokens: number; cost: number }
+export interface AgentUsage {
+  tokens: number;
+  cost: number;
+  /** Of those tokens, how many the turn under way has used so far (partly estimated until it ends). */
+  turn?: number;
+}
 
 /** One employee as remembered between runs. */
 export interface StaffSave {
@@ -47,6 +52,8 @@ export interface CrewHooks {
   note(agentId: string, text: string, line?: TermLine | null): void;
   /** A line for the agent's terminal only. */
   term(agentId: string, line: TermLine): void;
+  /** Something shown in the panels changed (e.g. the running token count). */
+  changed(): void;
   /** What they're writing right now, shown at the bottom of their terminal as it grows; null once it's done. */
   live(agentId: string, text: string | null): void;
   /** The agent at the front of the line has reached the office (or null once it's decided). */

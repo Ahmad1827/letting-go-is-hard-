@@ -171,6 +171,7 @@ export class OfficeScene extends Phaser.Scene {
       note: (id, text, line) => this.note(id, text, line),
       term: (id, line) => this.term(id, line),
       live: (id, text) => bus.emit('term:live', { id, text }),
+      changed: () => (this.dirty = true),
       pitch: (id, idea) => this.showPitch(id, idea),
       queue: (ids) => bus.emit('queue', ids.map((id) => this.agents.get(id)?.name ?? id)),
       limits: (l) => bus.emit('usage:limits', l),

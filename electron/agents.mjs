@@ -66,9 +66,56 @@ function resultText(content) {
 /** Text pieces arriving within this long of each other go to the office together. */
 const DELTA_MS = 30;
 
+/** How often the running token count goes to the office. */
+const USAGE_MS = 250;
+/** Rough characters per token, for output still being written (the real count comes when each reply ends). */
+const CHARS_PER_TOKEN = 4;
+
+/**
+ * Tokens used so far in the current turn, counted the way the turn's result adds them up:
+ * each model call's input (with cache) when it starts, and its output when it ends.
+ * While a reply is being written its output is estimated from the text streamed so far.
+ */
+function turnTally() {
+  let done = 0, input = 0, output = 0, chars = 0, thinking = 0;
+  const inputOf = (u) => (u?.input_tokens ?? 0) + (u?.cache_creation_input_tokens ?? 0) + (u?.cache_read_input_tokens ?? 0);
+  return {
+    /** Takes a stream-json event; true if the count changed. */
+    see(m) {
+      if (m.type !== 'stream_event' || m.parent_tool_use_id) return false;
+      const e = m.event;
+      if (e?.type === 'message_start') {
+        input = inputOf(e.message?.usage);
+        output = e.message?.usage?.output_tokens ?? 0;
+        chars = thinking = 0;
+        return true;
+      }
+      if (e?.type === 'content_block_delta') {
+        const d = e.delta ?? {};
+        if (typeof d.text === 'string') chars += d.text.length;
+        else if (typeof d.partial_json === 'string') chars += d.partial_json.length;
+        else if (typeof d.estimated_tokens === 'number') thinking = Math.max(thinking, d.estimated_tokens);
+        else return false;
+        return true;
+      }
+      if (e?.type === 'message_delta') {
+        // the call is over: its real output count replaces the estimate
+        done += input + (e.usage?.output_tokens ?? output);
+        input = output = chars = thinking = 0;
+        return true;
+      }
+      return false;
+    },
+    total: () => done + input + Math.max(output, Math.round(chars / CHARS_PER_TOKEN) + thinking),
+    reset() {
+      done = input = output = chars = thinking = 0;
+    },
+  };
+}
+
 /** Keep only what the office needs from each stream-json event. */
 function slim(m) {
-  // a piece of text as it's being written (only theirs, not a subagent's)
+  // a piece of text as it's being written (only theirs, not a subagent's); usage is counted separately
   if (m.type === 'stream_event') {
     const d = m.event?.type === 'content_block_delta' && m.event.delta;
     return d?.type === 'text_delta' && d.text && !m.parent_tool_use_id ? { kind: 'delta', text: d.text } : null;
@@ -167,12 +214,25 @@ export function setupAgents(ipcMain, getWindow) {
       if (text && !entry.closed) emit(id, { kind: 'delta', text });
       text = '';
     };
+    const tally = turnTally();
+    let tallyTimer = null;
+    const sendTally = () => {
+      tallyTimer = null;
+      if (!entry.closed) emit(id, { kind: 'usage', tokens: tally.total() });
+    };
     readline.createInterface({ input: p.stdout }).on('line', (line) => {
       let m;
       try {
         m = JSON.parse(line);
       } catch {
         return;
+      }
+      if (tally.see(m)) tallyTimer ??= setTimeout(sendTally, USAGE_MS);
+      // the turn's real total comes with the result; the running count starts over
+      if (m.type === 'result') {
+        clearTimeout(tallyTimer);
+        tallyTimer = null;
+        tally.reset();
       }
       const out = slim(m);
       if (!out) return;
@@ -189,6 +249,7 @@ export function setupAgents(ipcMain, getWindow) {
     p.on('error', (e) => emit(id, { kind: 'exit', code: -1, error: `Could not start ${eng.name} (${eng.command}): ${e.message}` }));
     p.on('exit', (code) => {
       flush();
+      clearTimeout(tallyTimer);
       if (procs.get(id) === entry) procs.delete(id);
       if (!entry.closed) emit(id, { kind: 'exit', code, error: code ? err.trim().split('\n').pop() : '' });
     });

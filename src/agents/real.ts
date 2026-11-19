@@ -23,6 +23,8 @@ type Msg =
   | { kind: 'note'; text: string }
   /** Text as it's being written, a few pieces at a time; the whole message follows as 'assistant'. */
   | { kind: 'delta'; text: string }
+  /** Tokens used so far in the turn that's under way (partly estimated); the result has the real total. */
+  | { kind: 'usage'; tokens: number }
   | { kind: 'exit'; code: number; error?: string };
 
 /** A user message: plain text, or text with pictures. */
@@ -100,6 +102,8 @@ interface Staff {
   inbox: string[];
   /** What they're writing right now, before the whole message arrives. */
   live: string;
+  /** Tokens used so far in the turn that's under way, until its result counts them for real. */
+  turnTokens: number;
   /** Tool calls in flight, by id, so their results can be summed up the way the tool would. */
   tools: Map<string, string>;
 }
@@ -195,7 +199,7 @@ export class RealCrew implements Crew {
       name, phase: 'research', since: Date.now(), engine: this.settings.defaultEngine, model: this.settings.defaultModel, skills: [...(this.settings.defaultSkills ?? [])], ideas: false, workCwd: null, workMode: 'default', idea: null, seen: new Set(), alive: false, nudged: false, permissions: [], place: 0,
       pitched: false, orders: null, ordersPictures: [], team: null, role: null, assignment: null, desk: null,
       activity: 'idle', lastShown: 0, usage: { tokens: 0, cost: 0 }, sessionCost: 0,
-      session: null, launchCwd: '', resumeNext: false, retry: null, held: null, inbox: [], live: '', tools: new Map(),
+      session: null, launchCwd: '', resumeNext: false, retry: null, held: null, inbox: [], live: '', turnTokens: 0, tools: new Map(),
     };
   }
 
@@ -446,7 +450,8 @@ export class RealCrew implements Crew {
   }
 
   usageOf(agentId: string) {
-    return this.staff.get(agentId)?.usage ?? null;
+    const s = this.staff.get(agentId);
+    return s ? { tokens: s.usage.tokens + s.turnTokens, cost: s.usage.cost, turn: s.turnTokens } : null;
   }
 
   setEngine(agentId: string, engine: string) {
@@ -805,6 +810,11 @@ export class RealCrew implements Crew {
   private onMessage(agentId: string, msg: Msg) {
     const s = this.staff.get(agentId);
     if (!s || s.held) return; // on hold: whatever was still on its way is dropped
+    if (msg.kind === 'usage') {
+      s.turnTokens = msg.tokens;
+      this.hooks.changed();
+      return;
+    }
     if (msg.kind === 'delta') {
       s.live += msg.text;
       // the pitch and assign blocks are for the office, not the screen
@@ -877,6 +887,7 @@ export class RealCrew implements Crew {
         this.hooks.limits({ status: msg.status, windows: msg.windows, at: Date.now() });
         break;
       case 'result':
+        s.turnTokens = 0;
         if (s.retry) break; // a resume that never got going; its exit starts a fresh one
         s.usage.tokens += msg.tokens;
         s.usage.cost += Math.max(0, msg.cost - s.sessionCost);
@@ -885,6 +896,7 @@ export class RealCrew implements Crew {
         break;
       case 'exit':
         s.alive = false;
+        this.keepTurnTokens(s);
         if (s.retry) {
           // the old conversation is gone: same job, fresh conversation
           const cfg = s.retry;
@@ -1027,6 +1039,16 @@ export class RealCrew implements Crew {
   private stopProc(agentId: string) {
     this.bridge.stop(agentId);
     this.clearLive(agentId);
+    const s = this.staff.get(agentId);
+    if (s) this.keepTurnTokens(s);
+  }
+
+  /** Stopped mid-turn, so no result will count it: keep the running count, estimate and all. */
+  private keepTurnTokens(s: Staff) {
+    if (!s.turnTokens) return;
+    s.usage.tokens += s.turnTokens;
+    s.turnTokens = 0;
+    this.hooks.changed();
   }
 
   private clearLive(agentId: string) {
