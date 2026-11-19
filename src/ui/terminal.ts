@@ -96,6 +96,8 @@ class Term {
   /** Team view: the last message from the owner, so one sent to several people shows once. */
   private lastUser: { text: string; t: number; to: HTMLElement; names: string[] } | null = null;
   private colors = new Map<string, string>();
+  /** What each person is writing right now, kept at the bottom of the log until the finished line replaces it. */
+  private liveRows = new Map<string, { row: HTMLElement; body: HTMLElement }>();
 
   constructor(readonly key: string, readonly agentId: string | null, readonly teamId: string | null) {
     const bar = el('header', 'term-bar');
@@ -274,10 +276,51 @@ class Term {
     }
     if (!fresh.length) return;
     fresh.sort((a, b) => a.n - b.n);
-    const stick = this.screen.scrollHeight - this.screen.scrollTop - this.screen.clientHeight < 40;
+    const stick = this.atBottom();
     for (const e of fresh.slice(-MAX_ROWS)) this.append(e, e.who);
     this.lastN = fresh[fresh.length - 1].n;
     while (this.log.childElementCount > MAX_ROWS) this.log.firstElementChild!.remove();
+    // whatever is still being written stays below the finished lines
+    for (const { row } of this.liveRows.values()) this.log.append(row);
+    if (stick) this.screen.scrollTop = this.screen.scrollHeight;
+  }
+
+  private atBottom() {
+    return this.screen.scrollHeight - this.screen.scrollTop - this.screen.clientHeight < 40;
+  }
+
+  /** A new line for someone: show it now, if they're in this terminal. */
+  lineAdded(id: string) {
+    const ids = this.members();
+    if (ids.includes(id)) this.renderLog(ids);
+  }
+
+  /** The text someone is writing grew (or is done: null). */
+  setLive(id: string, text: string | null) {
+    if (!this.members().includes(id)) return;
+    const stick = this.atBottom();
+    let live = this.liveRows.get(id);
+    if (text === null) {
+      live?.row.remove();
+      this.liveRows.delete(id);
+      return;
+    }
+    if (!live) {
+      const line = el('div', 't-msg live');
+      const body = el('div');
+      line.append(el('span', 't-dot', '●'), body);
+      let row = line;
+      if (this.teamId) {
+        row = el('div', 't-row');
+        const tag = el('span', 't-who', this.lastWho === id ? '' : viewOf(id)?.name ?? id);
+        tag.style.color = this.colorOf(id);
+        row.append(tag, line);
+      }
+      live = { row, body };
+      this.liveRows.set(id, live);
+    }
+    live.body.replaceChildren(md(text));
+    if (!live.row.isConnected) this.log.append(live.row);
     if (stick) this.screen.scrollTop = this.screen.scrollHeight;
   }
 
@@ -612,6 +655,9 @@ export function initTerminals() {
   });
   bus.on('term:open', (id: string) => viewOf(id) && openTerm(`a:${id}`, id, null));
   bus.on('term:team', (id: string) => teams.some((t) => t.id === id) && openTerm(`t:${id}`, null, id));
+  // straight from the agents, without waiting for the next office update
+  bus.on('term:line', (id: string) => terms.forEach((t) => t.lineAdded(id)));
+  bus.on('term:live', ({ id, text }: { id: string; text: string | null }) => terms.forEach((t) => t.setLive(id, text)));
   window.setInterval(() => terms.forEach((t) => t.tick()), 120);
   window.addEventListener('resize', () => terms.forEach((t) => t.clamp()));
 }

@@ -63,8 +63,16 @@ function resultText(content) {
   return text.length > 4000 ? text.slice(0, 4000) : text;
 }
 
+/** Text pieces arriving within this long of each other go to the office together. */
+const DELTA_MS = 30;
+
 /** Keep only what the office needs from each stream-json event. */
 function slim(m) {
+  // a piece of text as it's being written (only theirs, not a subagent's)
+  if (m.type === 'stream_event') {
+    const d = m.event?.type === 'content_block_delta' && m.event.delta;
+    return d?.type === 'text_delta' && d.text && !m.parent_tool_use_id ? { kind: 'delta', text: d.text } : null;
+  }
   if (m.type === 'system' && m.subtype === 'init') return { kind: 'init', model: m.model, cwd: m.cwd, session: m.session_id };
   if (m.type === 'assistant') {
     const parts = [];
@@ -109,7 +117,7 @@ export function setupAgents(ipcMain, getWindow) {
     const eng = engine(engineId);
     stop(id);
     const args = [
-      '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+      '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
       '--permission-prompt-tool', 'stdio', '--permission-mode', mode || 'default',
       '--strict-mcp-config',
     ];
@@ -150,6 +158,15 @@ export function setupAgents(ipcMain, getWindow) {
     const launch = launchOf(eng);
     const p = spawn(launch.file, [...launch.pre, ...args], { cwd: dir, env: launch.env, windowsHide: true });
     entry.p = p;
+    // text pieces are gathered for a moment and sent together; anything else sends them first, so order holds
+    let text = '';
+    let timer = null;
+    const flush = () => {
+      clearTimeout(timer);
+      timer = null;
+      if (text && !entry.closed) emit(id, { kind: 'delta', text });
+      text = '';
+    };
     readline.createInterface({ input: p.stdout }).on('line', (line) => {
       let m;
       try {
@@ -158,12 +175,20 @@ export function setupAgents(ipcMain, getWindow) {
         return;
       }
       const out = slim(m);
-      if (out) emit(id, out);
+      if (!out) return;
+      if (out.kind === 'delta') {
+        text += out.text;
+        timer ??= setTimeout(flush, DELTA_MS);
+        return;
+      }
+      flush();
+      emit(id, out);
     });
     let err = '';
     p.stderr.on('data', (d) => (err = (err + d).slice(-2000)));
     p.on('error', (e) => emit(id, { kind: 'exit', code: -1, error: `Could not start ${eng.name} (${eng.command}): ${e.message}` }));
     p.on('exit', (code) => {
+      flush();
       if (procs.get(id) === entry) procs.delete(id);
       if (!entry.closed) emit(id, { kind: 'exit', code, error: code ? err.trim().split('\n').pop() : '' });
     });

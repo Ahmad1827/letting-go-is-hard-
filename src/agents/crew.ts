@@ -47,6 +47,8 @@ export interface CrewHooks {
   note(agentId: string, text: string, line?: TermLine | null): void;
   /** A line for the agent's terminal only. */
   term(agentId: string, line: TermLine): void;
+  /** What they're writing right now, shown at the bottom of their terminal as it grows; null once it's done. */
+  live(agentId: string, text: string | null): void;
   /** The agent at the front of the line has reached the office (or null once it's decided). */
   pitch(agentId: string | null, idea: Idea | null): void;
   /** Everyone waiting to pitch, front of the line first. */

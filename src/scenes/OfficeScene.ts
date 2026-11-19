@@ -170,6 +170,7 @@ export class OfficeScene extends Phaser.Scene {
       emit: (ev) => this.apply(ev),
       note: (id, text, line) => this.note(id, text, line),
       term: (id, line) => this.term(id, line),
+      live: (id, text) => bus.emit('term:live', { id, text }),
       pitch: (id, idea) => this.showPitch(id, idea),
       queue: (ids) => bus.emit('queue', ids.map((id) => this.agents.get(id)?.name ?? id)),
       limits: (l) => bus.emit('usage:limits', l),
@@ -789,6 +790,8 @@ export class OfficeScene extends Phaser.Scene {
     a.term.push({ ...line, n: this.termN++, t: Date.now() });
     if (a.term.length > TERM_LINES) a.term.shift();
     this.dirty = true;
+    // open terminals show it now rather than with the next office update
+    bus.emit('term:line', id);
   }
 
   private pushApprovals() {

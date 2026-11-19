@@ -21,6 +21,8 @@ type Msg =
   | { kind: 'result'; ok: boolean; text: string; cost: number; tokens: number }
   | { kind: 'limits'; status?: string; windows: Record<string, UsageWindow> }
   | { kind: 'note'; text: string }
+  /** Text as it's being written, a few pieces at a time; the whole message follows as 'assistant'. */
+  | { kind: 'delta'; text: string }
   | { kind: 'exit'; code: number; error?: string };
 
 /** A user message: plain text, or text with pictures. */
@@ -96,6 +98,8 @@ interface Staff {
   held: Phase | null;
   /** Messages for them that came in while on hold, delivered when they're back. */
   inbox: string[];
+  /** What they're writing right now, before the whole message arrives. */
+  live: string;
   /** Tool calls in flight, by id, so their results can be summed up the way the tool would. */
   tools: Map<string, string>;
 }
@@ -191,7 +195,7 @@ export class RealCrew implements Crew {
       name, phase: 'research', since: Date.now(), engine: this.settings.defaultEngine, model: this.settings.defaultModel, skills: [...(this.settings.defaultSkills ?? [])], ideas: false, workCwd: null, workMode: 'default', idea: null, seen: new Set(), alive: false, nudged: false, permissions: [], place: 0,
       pitched: false, orders: null, ordersPictures: [], team: null, role: null, assignment: null, desk: null,
       activity: 'idle', lastShown: 0, usage: { tokens: 0, cost: 0 }, sessionCost: 0,
-      session: null, launchCwd: '', resumeNext: false, retry: null, held: null, inbox: [], tools: new Map(),
+      session: null, launchCwd: '', resumeNext: false, retry: null, held: null, inbox: [], live: '', tools: new Map(),
     };
   }
 
@@ -244,7 +248,7 @@ export class RealCrew implements Crew {
     if (!s || s.held) return;
     s.held = s.pitched ? 'pitching' : s.phase;
     // stop the process but keep the job, branch and conversation for later
-    this.bridge.stop(agentId);
+    this.stopProc(agentId);
     s.alive = false;
     s.retry = null;
     window.clearTimeout(s.breakTimer);
@@ -571,7 +575,7 @@ export class RealCrew implements Crew {
   /** Drop whatever they were doing: session, line, pending prompts, timers. */
   private reset(agentId: string) {
     const s = this.staff.get(agentId)!;
-    this.bridge.stop(agentId);
+    this.stopProc(agentId);
     s.alive = false;
     window.clearTimeout(s.breakTimer);
     window.clearTimeout(s.showTimer);
@@ -623,7 +627,7 @@ export class RealCrew implements Crew {
   private idle(agentId: string) {
     const s = this.staff.get(agentId)!;
     if (s.alive) {
-      this.bridge.stop(agentId);
+      this.stopProc(agentId);
       s.alive = false;
     }
     window.clearTimeout(s.breakTimer);
@@ -752,7 +756,7 @@ export class RealCrew implements Crew {
   private teamDone(team: TeamState, summary: string) {
     for (const w of team.workers) {
       const s = this.staff.get(w)!;
-      this.bridge.stop(w);
+      this.stopProc(w);
       s.alive = false;
       s.desk = null;
       this.note(w, `${team.name} finished "${team.job?.idea.title}"`);
@@ -801,6 +805,15 @@ export class RealCrew implements Crew {
   private onMessage(agentId: string, msg: Msg) {
     const s = this.staff.get(agentId);
     if (!s || s.held) return; // on hold: whatever was still on its way is dropped
+    if (msg.kind === 'delta') {
+      s.live += msg.text;
+      // the pitch and assign blocks are for the office, not the screen
+      const shown = s.live.split(/```(?:pitch|assign)/)[0].trim();
+      if (shown) this.hooks.live(agentId, shown);
+      return;
+    }
+    // anything else means that text is finished (or abandoned)
+    if (s.live) this.clearLive(agentId);
     const busy = s.phase === 'research' || s.phase === 'work';
     switch (msg.kind) {
       case 'init':
@@ -1008,6 +1021,18 @@ export class RealCrew implements Crew {
         s.showTimer = undefined;
         if ((s.phase === 'research' || s.phase === 'work') && !s.permissions.length) this.emitNow(agentId, s.activity);
       }, wait);
+  }
+
+  /** Stop their Claude Code process, and drop any half-written text from their terminal. */
+  private stopProc(agentId: string) {
+    this.bridge.stop(agentId);
+    this.clearLive(agentId);
+  }
+
+  private clearLive(agentId: string) {
+    const s = this.staff.get(agentId);
+    if (s) s.live = '';
+    this.hooks.live(agentId, null);
   }
 
   private emitNow(agentId: string, activity: AgentActivity, detail?: string) {
