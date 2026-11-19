@@ -2,7 +2,7 @@ import { bus } from '../bus';
 import { DEFAULT_SETTINGS, engineIn, modelLabel } from '../agents/crew';
 import type { AgentActivity, Settings, Team, TermEntry } from '../agents/types';
 import { el } from './dom';
-import { LABEL, type AgentView, type ApprovalView } from './hud';
+import { labelOf, type AgentView, type ApprovalView } from './hud';
 import { raise } from './panels';
 import { acceptPictures } from './paste';
 
@@ -354,8 +354,8 @@ class Term {
       this.busySince = 0;
       const waiting = views.filter((v) => v.activity !== 'awaiting');
       const text = this.teamId
-        ? waiting.map((v) => `${v.name}: ${LABEL[v.activity]}`).join(' · ')
-        : waiting.map((v) => (v.detail && v.activity !== 'done' ? `${LABEL[v.activity]} · ${v.detail}` : LABEL[v.activity])).join('');
+        ? waiting.map((v) => `${v.name}: ${labelOf(v)}`).join(' · ')
+        : waiting.map((v) => (v.detail && v.activity !== 'done' ? `${labelOf(v)} · ${v.detail}` : labelOf(v))).join('');
       this.status.className = 'term-status idle';
       this.status.textContent = text;
       return;
@@ -531,6 +531,7 @@ class Term {
           '/clear clears this screen (they still remember everything)',
           '/stop interrupts what they are doing',
           '/hold puts them on hold · /reopen brings them back',
+          `/ideas on|off: whether ${this.teamId ? 'the manager comes' : 'they come'} up with ideas when there's nothing to do`,
           '/model shows the models · /model <name> switches',
         ].forEach((l) => this.print(l));
         return;
@@ -550,6 +551,13 @@ class Term {
         if (this.teamId) bus.emit('team:hold', { id: this.teamId, on });
         else bus.emit('agent:hold', { id: ids[0], on });
         return this.print(on ? 'On hold. /reopen to bring them back.' : 'Reopened');
+      }
+      case 'ideas': {
+        // in a team it's the manager who pitches
+        const lead = viewOf(ids[0])!;
+        const on = /^(on|yes|1)$/i.test(arg) ? true : /^(off|no|0)$/i.test(arg) ? false : !lead.status.ideas;
+        bus.emit('agent:ideas', { id: lead.id, on });
+        return this.print(on ? `${lead.name} will come up with ideas when free` : `${lead.name} stays idle until told what to do`);
       }
       case 'model': {
         const lead = viewOf(ids[0])!;

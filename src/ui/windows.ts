@@ -3,7 +3,7 @@ import { DEFAULT_SETTINGS, engineIn, modelLabel } from '../agents/crew';
 import type { EngineConfig, Phase, Settings, Team } from '../agents/types';
 import { OWNER } from '../owner';
 import { byId, el } from './dom';
-import { DOT, LABEL, termButton, type AgentView } from './hud';
+import { DOT, labelOf, termButton, type AgentView } from './hud';
 
 /**
  * The bigger windows: Settings (AI engines and how agents behave) and the
@@ -203,7 +203,7 @@ const STAGES: [string, Phase[]][] = [
   ['Done', ['break']],
 ];
 
-const PHASE_NOTE: Partial<Record<Phase, string>> = { home: 'Gone home', stopped: 'Stopped', held: 'On hold' };
+const PHASE_NOTE: Partial<Record<Phase, string>> = { idle: 'Idle', home: 'Gone home', stopped: 'Stopped', held: 'On hold' };
 
 function since(ms: number) {
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
@@ -255,7 +255,7 @@ function card(a: AgentView, close: () => void) {
   const now = el('div', 'board-now');
   const dot = el('span', 'dot');
   dot.style.background = DOT[a.activity];
-  now.append(dot, el('span', undefined, LABEL[a.activity]), el('span', 'hint', ` for ${since(a.status.since)}`));
+  now.append(dot, el('span', undefined, labelOf(a)), el('span', 'hint', ` for ${since(a.status.since)}`));
 
   info.append(head, track, now);
   if (a.task) info.append(el('div', 'task', a.task));
@@ -283,6 +283,7 @@ function initBoard() {
       [agents.length, agents.length === 1 ? 'person' : 'people'],
       [count(['work']), 'working'],
       [count(['research']), 'researching'],
+      [count(['idle']), 'idle'],
       [count(['queued', 'pitching']), `waiting for ${OWNER}`],
       [count(['held']), 'on hold'],
       [teams.length, teams.length === 1 ? 'team' : 'teams'],

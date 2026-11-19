@@ -15,6 +15,8 @@ export interface StaffSave {
   model: string;
   /** The skills picked for them; none if they were saved before skills existed. */
   skills?: string[];
+  /** Comes up with ideas on their own when there's nothing to do. */
+  ideas?: boolean;
   usage: AgentUsage;
   seen: string[];
   phase: Phase;
@@ -86,6 +88,8 @@ export interface Crew {
   /** Choose which installed skills this agent may use. */
   setSkills(agentId: string, skills: string[]): void;
   skillsOf(agentId: string): string[];
+  /** Tick on: when free they look around and pitch ideas. Off: they sit idle until given something. */
+  setIdeas(agentId: string, on: boolean): void;
   /** Null for simulated agents, which use nothing. */
   usageOf(agentId: string): AgentUsage | null;
   setEngine(agentId: string, engine: string): void;

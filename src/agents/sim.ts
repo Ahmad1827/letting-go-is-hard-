@@ -38,6 +38,8 @@ interface Run {
   phase: Phase;
   since: number;
   engine: string;
+  /** Comes up with ideas on their own when free. */
+  ideas: boolean;
   /** On hold: the phase they were in when paused. */
   held?: Phase | null;
 }
@@ -77,6 +79,16 @@ export class Sim implements Crew {
     return [];
   }
 
+  setIdeas(agentId: string, on: boolean) {
+    const run = this.runs.get(agentId);
+    if (!run || run.ideas === on) return;
+    run.ideas = on;
+    this.note(agentId, on ? `${OWNER} asked ${run.name} to come up with ideas` : `${OWNER} told ${run.name} to stop coming up with ideas`);
+    if (run.held || (run.team && run.team.manager !== agentId)) return;
+    if (on && run.phase === 'idle') this.research(agentId);
+    else if (!on && run.phase === 'research') this.idle(agentId);
+  }
+
   usageOf() {
     return null;
   }
@@ -88,7 +100,7 @@ export class Sim implements Crew {
 
   statusOf(agentId: string): AgentStatus {
     const run = this.runs.get(agentId)!;
-    return { phase: run.pitched ? 'pitching' : run.phase, since: run.since, project: run.idea?.project ?? null, branch: run.phase === 'work' ? run.idea?.branch ?? null : null, engine: run.engine };
+    return { phase: run.pitched ? 'pitching' : run.phase, since: run.since, project: run.idea?.project ?? null, branch: run.phase === 'work' ? run.idea?.branch ?? null : null, engine: run.engine, ideas: run.ideas };
   }
 
   workingCount() {
@@ -105,14 +117,14 @@ export class Sim implements Crew {
 
   interrupt() {}
 
-  begin(agentId: string, name: string) {
-    this.runs.set(agentId, { name, steps: [], i: -1, settled: false, idea: null, seen: new Set(), place: 0, pitched: false, team: null, phase: 'research', since: Date.now(), engine: this.settings.defaultEngine });
+  begin(agentId: string, name: string, ideas = false) {
+    this.runs.set(agentId, { name, steps: [], i: -1, settled: false, idea: null, seen: new Set(), place: 0, pitched: false, team: null, phase: 'research', since: Date.now(), engine: this.settings.defaultEngine, ideas });
     this.research(agentId);
   }
 
   snapshot(): CrewSave {
     return {
-      staff: [...this.runs].map(([id, r]) => ({ id, name: r.name, engine: r.engine, model: this.modelOf(id), usage: { tokens: 0, cost: 0 }, seen: [...r.seen], phase: 'research', idea: null, work: null, desk: null, assignment: null })),
+      staff: [...this.runs].map(([id, r]) => ({ id, name: r.name, engine: r.engine, model: this.modelOf(id), ideas: r.ideas, usage: { tokens: 0, cost: 0 }, seen: [...r.seen], phase: 'research', idea: null, work: null, desk: null, assignment: null })),
       teams: [...this.teams.values()],
     };
   }
@@ -120,7 +132,7 @@ export class Sim implements Crew {
   /** Simulated staff just start their loop again; teams re-form and the manager pitches. Sample projects are always ready. */
   restore(save: CrewSave) {
     for (const p of save.staff) {
-      this.begin(p.id, p.name);
+      this.begin(p.id, p.name, p.ideas);
       this.models.set(p.id, p.model);
       p.seen.forEach((t) => this.runs.get(p.id)!.seen.add(t));
     }
@@ -150,7 +162,7 @@ export class Sim implements Crew {
     const phase = run.held;
     run.held = null;
     this.note(agentId, 'Back from hold');
-    if (phase === 'queued' || phase === 'pitching' || !run.timer) return this.research(agentId);
+    if (phase === 'queued' || phase === 'pitching' || phase === 'idle' || !run.timer) return this.research(agentId);
     this.setPhase(agentId, phase);
     run.timer.paused = false;
     const step = run.steps[run.i];
@@ -244,7 +256,7 @@ export class Sim implements Crew {
     for (const w of t.workers) this.standby(w);
     const m = this.runs.get(t.manager)!;
     if (t.task?.trim()) this.work(t.manager, this.orders(m.name, t.task.trim(), undefined));
-    else this.research(t.manager);
+    else this.research(t.manager, undefined, true);
     this.refreshLine();
     this.pushTeams();
   }
@@ -291,10 +303,25 @@ export class Sim implements Crew {
 
   // ---------------------------------------------------------------- phases
 
-  private research(agentId: string, focus?: ProjectInfo) {
+  /** Nothing to do and not asked to think of ideas: sit at the desk. */
+  private idle(agentId: string) {
+    const run = this.runs.get(agentId)!;
+    run.timer?.remove();
+    run.timer = undefined;
+    run.steps = [];
+    run.i = -1;
+    run.idea = null;
+    this.next.delete(agentId);
+    this.setPhase(agentId, 'idle');
+    this.hooks.emit({ agentId, activity: 'idle', detail: 'Idle. Tick "Come up with ideas" to get them thinking.' });
+  }
+
+  /** `asked`: the owner wants a pitch now, ticked or not. */
+  private research(agentId: string, focus?: ProjectInfo, asked = false) {
     const run = this.runs.get(agentId);
     if (!run) return;
     if (run.team && run.team.manager !== agentId) return this.standby(agentId);
+    if (!run.ideas && !asked) return this.idle(agentId);
     this.setPhase(agentId, 'research');
     const project = focus ?? this.projects[Math.floor(Math.random() * this.projects.length)];
     if (!project) {

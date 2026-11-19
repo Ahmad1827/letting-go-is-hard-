@@ -52,6 +52,9 @@ export const LABEL: Record<AgentActivity, string> = {
   standby: 'Waiting for a task',
 };
 
+/** What they're doing, in a word: "Idle" rather than "On break" when they've simply nothing to do. */
+export const labelOf = (a: AgentView) => (a.status.phase === 'idle' ? 'Idle' : LABEL[a.activity]);
+
 export const DOT: Record<AgentActivity, string> = {
   idle: '#808080',
   thinking: '#8e5cc4',
@@ -587,7 +590,7 @@ export function initHud() {
     dot.style.background = DOT[a.activity];
     li.append(dot, el('b', undefined, a.name));
     if (role) li.append(el('span', `role ${role}`, role === 'manager' ? 'Manager' : 'Worker'));
-    li.append(el('span', 'status', LABEL[a.activity]), termButton('term:open', a.id, `Open ${a.name}'s terminal`));
+    li.append(el('span', 'status', labelOf(a)), termButton('term:open', a.id, `Open ${a.name}'s terminal`));
     li.onclick = () => {
       bus.emit('select', a.id);
       bus.emit('focus', a.id);
@@ -649,7 +652,7 @@ export function initHud() {
   };
 
   /** Built once per selected agent, then updated in place so typing isn't wiped by refreshes. */
-  let panel: { id: string; status: HTMLElement; task: HTMLElement; usage: HTMLElement; decision: HTMLElement; log: HTMLElement; model: HTMLSelectElement; skills: HTMLButtonElement; skillTags: HTMLElement; skillsShown: string; shown: string } | null = null;
+  let panel: { id: string; status: HTMLElement; task: HTMLElement; usage: HTMLElement; decision: HTMLElement; log: HTMLElement; model: HTMLSelectElement; ideas: HTMLInputElement; ideasRow: HTMLElement; skills: HTMLButtonElement; skillTags: HTMLElement; skillsShown: string; shown: string } | null = null;
 
   const buildInspect = (a: AgentView) => {
     const who = el('div', 'who');
@@ -721,6 +724,14 @@ export function initHud() {
     buttons.append(terminal, skills, stop, fire);
     controls.append(label, buttons);
 
+    const ideasRow = el('label', 'check ideas');
+    const ideas = el('input');
+    ideas.type = 'checkbox';
+    ideas.checked = a.status.ideas;
+    ideas.onchange = () => bus.emit('agent:ideas', { id: a.id, on: ideas.checked });
+    ideasRow.title = `Ticked: when ${a.name} has nothing to do, they look through the projects and pitch ideas. Unticked: they stay idle until you message them.`;
+    ideasRow.append(ideas, el('span', undefined, 'Come up with ideas'));
+
     const skillTags = el('div', 'skill-tags');
     const decisionSlot = el('div');
     const log = el('pre', 'log');
@@ -738,8 +749,8 @@ export function initHud() {
       bus.emit('agent:say', { id: a.id, text: text || 'Have a look at this picture.', pictures: pics.take() });
       input.value = '';
     };
-    inspect.replaceChildren(who, controls, skillTags, decisionSlot, log, pics.strip, chat);
-    panel = { id: a.id, status, task, usage, decision: decisionSlot, log, model, skills, skillTags, skillsShown: '', shown: '' };
+    inspect.replaceChildren(who, controls, ideasRow, skillTags, decisionSlot, log, pics.strip, chat);
+    panel = { id: a.id, status, task, usage, decision: decisionSlot, log, model, ideas, ideasRow, skills, skillTags, skillsShown: '', shown: '' };
   };
 
   const renderInspect = () => {
@@ -751,7 +762,10 @@ export function initHud() {
     }
     if (panel?.id !== a.id) buildInspect(a);
     const p = panel!;
-    p.status.textContent = a.team ? `${LABEL[a.activity]} · ${a.role === 'manager' ? 'Manager' : 'Worker'}, ${a.team}` : LABEL[a.activity];
+    if (document.activeElement !== p.ideas) p.ideas.checked = a.status.ideas;
+    // workers take their tasks from the manager
+    p.ideasRow.hidden = a.role === 'worker';
+    p.status.textContent = a.team ? `${labelOf(a)} · ${a.role === 'manager' ? 'Manager' : 'Worker'}, ${a.team}` : labelOf(a);
     p.task.textContent = a.task || '—';
     p.usage.textContent = a.usage ? `${tokens(a.usage.tokens)} tokens · ${dollars(a.usage.cost)} at API prices` : '';
     if (document.activeElement !== p.model) p.model.value = a.model;

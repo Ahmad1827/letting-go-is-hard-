@@ -19,7 +19,10 @@ npm run dist:linux   # Linux AppImage
 
 ## How agents work
 
-Each agent loops through the same cycle:
+New hires sit **idle** until you give them something to do: message them, or tick
+**Come up with ideas** in their panel (or type `/ideas on` in their terminal). Ticked,
+they loop through the cycle below on their own; unticked, they stop looking for ideas and
+go back to idle once their current job is done.
 
 1. **Research**: looks through the folders in `~/proiecte` (in the conference room and the archive).
 2. **Queue**: walks to the line outside Ahmad's office. One pitches at a time, three
@@ -27,7 +30,8 @@ Each agent loops through the same cycle:
 3. **Pitch**: stands at Ahmad's desk. The *Office* panel shows the idea, the
    plan and the git branch it would use. You can:
    - **Approve**: they go and do it, on its own branch.
-   - **Don't approve**: they go back and come up with something else.
+   - **Don't approve**: they go back and come up with something else (or go idle, if
+     *Come up with ideas* isn't ticked).
    - **Tell them what to do instead** (in the pitch card, or by messaging them while they
      pitch): they work out which project you mean, or start a new one, and get going
      without pitching again.
@@ -46,7 +50,8 @@ big enough for the team. Once the work starts:
 - Each worker builds on their own branch, started from the team's branch, and reports
   back when done. Workers wait at their desks between tasks.
 - The manager reviews their work, merges it into the team branch, runs the checks, and
-  tells you it's done. Then the manager goes looking for the team's next idea.
+  tells you it's done. Then the manager goes looking for the team's next idea if their
+  *Come up with ideas* box is ticked, or waits idle if not.
 
 *Disband* sends everyone back to working on their own.
 
@@ -121,7 +126,7 @@ In a plain browser (`npx vite`) the agents are simulated instead (`src/agents/si
 desk, with their model, team, full log and usage, and they continue their own Claude Code
 conversation (`--resume`), so they remember what was said and done. Whoever was in the
 middle of an approved job picks it back up on the same branch, whoever was waiting to pitch
-gets back in line, and the rest carry on researching. People only leave when you **Fire** them (in their
+gets back in line, and the rest carry on researching (or stay idle). People only leave when you **Fire** them (in their
 panel, with a confirmation): they stop, walk to the elevator and go, their desk frees up,
 and their branches stay. The office is saved in `office.json` in the app's data folder
 (an office that suddenly goes empty keeps the previous one in `office.bak.json`).

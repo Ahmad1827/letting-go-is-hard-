@@ -114,7 +114,8 @@ export interface SkillInfo {
 }
 
 /** Where an agent is in its cycle, for the work board. */
-export type Phase = 'research' | 'queued' | 'pitching' | 'work' | 'break' | 'standby' | 'home' | 'stopped' | 'held';
+/** 'idle': nothing to do, and not asked to come up with ideas. */
+export type Phase = 'idle' | 'research' | 'queued' | 'pitching' | 'work' | 'break' | 'standby' | 'home' | 'stopped' | 'held';
 
 export interface AgentStatus {
   phase: Phase;
@@ -123,6 +124,8 @@ export interface AgentStatus {
   project: string | null;
   branch: string | null;
   engine: string;
+  /** Ticked: when there's nothing to do they look around and pitch ideas. Unticked: they sit idle until told what to do. */
+  ideas: boolean;
 }
 
 /** One line of an agent's terminal, shown the way Claude Code shows it. */

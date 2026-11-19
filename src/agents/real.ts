@@ -53,6 +53,8 @@ interface Staff {
   model: string;
   /** The skills picked for them. Nothing picked means no skills at all. */
   skills: string[];
+  /** Ticked: when free they look around and pitch ideas. Unticked: idle until told what to do. */
+  ideas: boolean;
   /** Where approved work is happening, once it starts, and its permission mode. */
   workCwd: string | null;
   workMode: string;
@@ -159,6 +161,8 @@ ${OWNER} or ${manager} may message you; answer briefly.`;
 const RESUME = `You were paused (the office closed, or ${OWNER} put you on hold) while on this and you're back now. Check what you already did here (git status, git log, the files), then carry on and finish the job.`;
 const RESUME_RESEARCH = `You were paused (the office closed, or ${OWNER} put you on hold) while researching and you're back now. Carry on from where you were and end with the \`\`\`pitch block.`;
 
+const LOOK_AROUND = 'Have a look around and pitch one idea.';
+
 const short = (s: string, n = 120) => (s.length > n ? `${s.slice(0, n - 3)}...` : s);
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24);
 
@@ -184,7 +188,7 @@ export class RealCrew implements Crew {
 
   private fresh(name: string): Staff {
     return {
-      name, phase: 'research', since: Date.now(), engine: this.settings.defaultEngine, model: this.settings.defaultModel, skills: [...(this.settings.defaultSkills ?? [])], workCwd: null, workMode: 'default', idea: null, seen: new Set(), alive: false, nudged: false, permissions: [], place: 0,
+      name, phase: 'research', since: Date.now(), engine: this.settings.defaultEngine, model: this.settings.defaultModel, skills: [...(this.settings.defaultSkills ?? [])], ideas: false, workCwd: null, workMode: 'default', idea: null, seen: new Set(), alive: false, nudged: false, permissions: [], place: 0,
       pitched: false, orders: null, ordersPictures: [], team: null, role: null, assignment: null, desk: null,
       activity: 'idle', lastShown: 0, usage: { tokens: 0, cost: 0 }, sessionCost: 0,
       session: null, launchCwd: '', resumeNext: false, retry: null, held: null, inbox: [], tools: new Map(),
@@ -196,7 +200,7 @@ export class RealCrew implements Crew {
     const noPictures = (idea: Idea | null) => idea && { ...idea, pictures: undefined };
     return {
       staff: [...this.staff].map(([id, s]) => ({
-        id, name: s.name, engine: s.engine, model: s.model, skills: s.skills, usage: s.usage, seen: [...s.seen],
+        id, name: s.name, engine: s.engine, model: s.model, skills: s.skills, ideas: s.ideas, usage: s.usage, seen: [...s.seen],
         phase: s.pitched ? 'pitching' : s.phase,
         idea: noPictures(s.idea),
         work: s.workCwd ? { cwd: s.workCwd, mode: s.workMode } : null,
@@ -209,7 +213,7 @@ export class RealCrew implements Crew {
   restore(save: CrewSave, ready?: Promise<unknown>) {
     for (const p of save.staff) {
       this.staff.set(p.id, {
-        ...this.fresh(p.name), engine: p.engine, model: p.model, skills: p.skills ?? [], usage: { ...p.usage }, seen: new Set(p.seen),
+        ...this.fresh(p.name), engine: p.engine, model: p.model, skills: p.skills ?? [], ideas: p.ideas ?? false, usage: { ...p.usage }, seen: new Set(p.seen),
         idea: p.idea, workCwd: p.work?.cwd ?? null, workMode: p.work?.mode ?? 'default', desk: p.desk as WorkPlace | null, assignment: p.assignment,
         session: p.session ?? null, resumeNext: !!p.session, held: p.held ?? null, inbox: p.inbox ?? [],
         ...(p.held ? { phase: 'held' as Phase } : {}),
@@ -308,7 +312,7 @@ export class RealCrew implements Crew {
       this.line.push(agentId);
       this.note(agentId, `Still has the idea for ${s.idea.project}, waiting to see ${OWNER}`);
       this.refreshLine();
-    } else if (phase === 'research' && s.session?.cwd === '') {
+    } else if (phase === 'research' && s.session?.cwd === '' && s.ideas) {
       // same conversation, so they still know what they'd looked at
       this.research(agentId, RESUME_RESEARCH);
     } else {
@@ -365,7 +369,8 @@ export class RealCrew implements Crew {
       void this.startWork(agentId, idea);
     } else if (d.kind === 'reject') {
       this.note(agentId, `${OWNER} passed on "${idea.title}"`);
-      this.backToResearch(agentId, `${OWNER} passed on that idea. Pitch a different one, maybe in another project.`);
+      if (s.ideas) this.backToResearch(agentId, `${OWNER} passed on that idea. Pitch a different one, maybe in another project.`);
+      else this.idle(agentId);
     } else {
       this.note(agentId, `${OWNER}: not that. ${d.text}${pictureNote(d.pictures)}`, { k: 'user', text: `Not that. ${d.text}`, pics: d.pictures?.length });
       s.orders = d.text;
@@ -425,6 +430,17 @@ export class RealCrew implements Crew {
     return this.staff.get(agentId)?.skills ?? [];
   }
 
+  setIdeas(agentId: string, on: boolean) {
+    const s = this.staff.get(agentId);
+    if (!s || s.ideas === on) return;
+    s.ideas = on;
+    this.note(agentId, on ? `${OWNER} asked ${s.name} to come up with ideas` : `${OWNER} told ${s.name} to stop coming up with ideas`);
+    if (s.held || s.role === 'worker') return; // picked up when reopened; workers take tasks from their manager
+    if (on && s.phase === 'idle') this.research(agentId);
+    // still looking for an idea of their own: stop; anything the owner asked for carries on
+    else if (!on && s.phase === 'research' && !s.orders) this.idle(agentId);
+  }
+
   usageOf(agentId: string) {
     return this.staff.get(agentId)?.usage ?? null;
   }
@@ -446,6 +462,7 @@ export class RealCrew implements Crew {
       project: s.idea?.project ?? null,
       branch: working ? s.desk?.branch ?? s.idea?.branch ?? null : null,
       engine: s.engine,
+      ideas: s.ideas,
     };
   }
 
@@ -521,7 +538,7 @@ export class RealCrew implements Crew {
       m.orders = t.task.trim();
       m.ordersPictures = pictures;
       this.research(t.manager, ORDERS_PROMPT(m.orders, true), pictures);
-    } else this.research(t.manager);
+    } else this.research(t.manager, LOOK_AROUND);
     this.pushTeams();
   }
 
@@ -587,6 +604,8 @@ export class RealCrew implements Crew {
     const s = this.staff.get(agentId)!;
     if (s.role === 'worker') return this.standby(agentId);
     if (this.background) return this.goHome(agentId);
+    // nothing asked of them: only go looking for ideas if that box is ticked
+    if (prompt === undefined && !s.ideas && !s.orders) return this.idle(agentId);
     this.setPhase(s, 'research');
     s.idea = null;
     s.nudged = false;
@@ -595,9 +614,27 @@ export class RealCrew implements Crew {
     const team = this.teamOf(s);
     const system = team ? MANAGER_RESEARCH_PROMPT(s.name, team.workers.map((w) => this.nameOf(w))) : RESEARCH_PROMPT(s.name);
     const avoid = s.seen.size ? ` Don't re-pitch these: ${[...s.seen].join('; ')}.` : '';
-    this.launch(agentId, { model: s.model || undefined, system, prompt: content((prompt ?? 'Have a look around and pitch one idea.') + avoid, pictures), mode: 'default' });
+    this.launch(agentId, { model: s.model || undefined, system, prompt: content((prompt ?? LOOK_AROUND) + avoid, pictures), mode: 'default' });
     this.note(agentId, s.orders ? 'Working out what that means' : 'Looking through the projects for something to improve');
     this.emitNow(agentId, 'thinking');
+  }
+
+  /** Nothing to do and not asked to think of ideas: sit at the desk until told what to do. */
+  private idle(agentId: string) {
+    const s = this.staff.get(agentId)!;
+    if (s.alive) {
+      this.bridge.stop(agentId);
+      s.alive = false;
+    }
+    window.clearTimeout(s.breakTimer);
+    if (this.line.includes(agentId)) this.leaveLine(agentId);
+    s.idea = null;
+    s.pitched = false;
+    s.permissions = [];
+    s.resumeNext = false;
+    this.setPhase(s, 'idle');
+    this.emitNow(agentId, 'idle', 'Idle. Tick "Come up with ideas" or message them.');
+    this.checkAllDone();
   }
 
   private backToResearch(agentId: string, message: Content) {
