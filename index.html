@@ -37,15 +37,16 @@
       <header id="deck-bar">
         <div id="deck-tabs" role="tablist"></div>
         <div class="deck-tools">
-          <button id="deck-out" title="Back to all terminals (Esc, or Ctrl + scroll down)">⊖ All terminals</button>
-          <button id="deck-group" title="Put agents together in a group">+ Create group</button>
+          <button id="deck-out" title="Back to all terminals (Esc, or Ctrl + scroll down)">[esc] all</button>
+          <button id="deck-group" title="Put agents together in a group">[+] new group</button>
         </div>
       </header>
       <div id="deck-grid">
         <div class="deck-row groups" id="deck-groups"></div>
         <div class="deck-row people" id="deck-people"></div>
-        <p id="deck-empty" class="hint" hidden>Nobody hired yet. Open Staff (top left) and hire someone.</p>
+        <p id="deck-empty" hidden>$ ls staff/<br />total 0<br /><br />Nobody hired yet. Open Staff (top left) and hire someone.</p>
       </div>
+      <footer id="deck-status"><span id="deck-status-left"></span><span id="deck-status-right"></span></footer>
     </section>
 
     <div id="windows">

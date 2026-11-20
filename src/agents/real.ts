@@ -88,6 +88,8 @@ interface Staff {
   lastShown: number;
   showTimer?: number;
   breakTimer?: number;
+  /** Free with nothing to do: when this goes off they go looking for an idea to pitch. */
+  restTimer?: number;
   usage: AgentUsage;
   /** The running session's cost so far; Claude Code reports it cumulatively. */
   sessionCost: number;
@@ -287,6 +289,7 @@ export class RealCrew implements Crew {
     s.alive = false;
     s.retry = null;
     window.clearTimeout(s.breakTimer);
+    window.clearTimeout(s.restTimer);
     window.clearTimeout(s.showTimer);
     s.showTimer = undefined;
     s.permissions = [];
@@ -458,7 +461,7 @@ export class RealCrew implements Crew {
 
   decide(agentId: string, d: Decision) {
     const s = this.staff.get(agentId);
-    if (!s || this.line[0] !== agentId || !s.idea) return;
+    if (!s || !this.line.includes(agentId) || !s.idea) return;
     this.leaveLine(agentId);
     const idea = s.idea;
     s.seen.add(idea.title);
@@ -467,7 +470,8 @@ export class RealCrew implements Crew {
       void this.startWork(agentId, idea);
     } else if (d.kind === 'reject') {
       this.note(agentId, `${OWNER} passed on "${idea.title}"`);
-      if (s.ideas) this.backToResearch(agentId, `${OWNER} passed on that idea. Pitch a different one, maybe in another project.`);
+      // the next idea waits until they've been left with nothing to do for a while again
+      if (s.ideas) this.rest(agentId);
       else this.idle(agentId);
     } else {
       this.note(agentId, `${OWNER}: not that. ${d.text}${pictureNote(d.pictures)}`, { k: 'user', text: `Not that. ${d.text}`, pics: d.pictures?.length });
@@ -480,8 +484,8 @@ export class RealCrew implements Crew {
   say(agentId: string, text: string, pictures: Picture[] = []) {
     const s = this.staff.get(agentId);
     if (!s) return;
-    // talking to someone mid-pitch means "not that, do this instead"
-    if (s.pitched) return this.decide(agentId, { kind: 'instead', text, pictures });
+    // talking to someone with a pitch waiting means "not that, do this instead"
+    if (s.pitched || (s.phase === 'queued' && s.idea)) return this.decide(agentId, { kind: 'instead', text, pictures });
     if (s.held) {
       this.note(agentId, `${OWNER}: ${text} (on hold; they'll get this when reopened)`, { k: 'user', text });
       this.hooks.term(agentId, { k: 'note', text: "On hold: they'll get this when reopened" });
@@ -536,7 +540,7 @@ export class RealCrew implements Crew {
     if (s.held || s.role === 'worker') return; // picked up when reopened; workers take tasks from their manager
     if (on && s.phase === 'idle') this.research(agentId);
     // still looking for an idea of their own: stop; anything the owner asked for carries on
-    else if (!on && s.phase === 'research' && !s.orders) this.idle(agentId);
+    else if (!on && (s.phase === 'idle' || (s.phase === 'research' && !s.orders))) this.idle(agentId);
   }
 
   usageOf(agentId: string) {
@@ -562,6 +566,7 @@ export class RealCrew implements Crew {
       branch: working ? s.desk?.branch ?? s.idea?.branch ?? null : null,
       engine: s.engine,
       ideas: s.ideas,
+      pitch: s.phase === 'queued' && s.idea && !s.orders ? s.idea : null,
     };
   }
 
@@ -638,7 +643,7 @@ export class RealCrew implements Crew {
       m.orders = t.task.trim();
       m.ordersPictures = pictures;
       this.research(t.manager, ORDERS_PROMPT(m.orders, true), pictures);
-    } else this.research(t.manager, LOOK_AROUND);
+    } else this.rest(t.manager, true);
     this.pushTeams();
   }
 
@@ -741,6 +746,7 @@ export class RealCrew implements Crew {
     this.stopProc(agentId);
     s.alive = false;
     window.clearTimeout(s.breakTimer);
+    window.clearTimeout(s.restTimer);
     window.clearTimeout(s.showTimer);
     s.showTimer = undefined;
     s.permissions = [];
@@ -767,12 +773,17 @@ export class RealCrew implements Crew {
 
   // ---------------------------------------------------------------- phases
 
-  private research(agentId: string, prompt?: string, pictures: Picture[] = []) {
+  /** `now`: they've been left with nothing to do long enough, so go and look for an idea straight away. */
+  private research(agentId: string, prompt?: string, pictures: Picture[] = [], now = false) {
     const s = this.staff.get(agentId)!;
     if (s.role === 'worker') return this.standby(agentId);
     if (this.background) return this.goHome(agentId);
-    // nothing asked of them: only go looking for ideas if that box is ticked
-    if (prompt === undefined && !s.ideas && !s.orders) return this.idle(agentId);
+    // nothing asked of them: only go looking for ideas if that box is ticked, and only once they've been free a while
+    if (prompt === undefined && !s.orders) {
+      if (!s.ideas) return this.idle(agentId);
+      if (!now) return this.rest(agentId);
+    }
+    window.clearTimeout(s.restTimer);
     this.setPhase(s, 'research');
     s.idea = null;
     s.nudged = false;
@@ -786,22 +797,40 @@ export class RealCrew implements Crew {
     this.emitNow(agentId, 'thinking');
   }
 
-  /** Nothing to do and not asked to think of ideas: sit at the desk until told what to do. */
-  private idle(agentId: string) {
+  /** Nothing to do: sit at the desk until told what to do. */
+  private idle(agentId: string, detail = 'Idle. Tick "Come up with ideas" or message them.') {
     const s = this.staff.get(agentId)!;
     if (s.alive) {
       this.stopProc(agentId);
       s.alive = false;
     }
     window.clearTimeout(s.breakTimer);
+    window.clearTimeout(s.restTimer);
     if (this.line.includes(agentId)) this.leaveLine(agentId);
     s.idea = null;
     s.pitched = false;
     s.permissions = [];
     s.resumeNext = false;
     this.setPhase(s, 'idle');
-    this.emitNow(agentId, 'idle', 'Idle. Tick "Come up with ideas" or message them.');
+    this.emitNow(agentId, 'idle', detail);
     this.checkAllDone();
+  }
+
+  /**
+   * Free, and allowed to come up with ideas: wait at the desk, and only if
+   * nothing comes in for a few minutes go looking for something to pitch.
+   * `always`: a manager whose team was made without a task pitches even with the box unticked.
+   */
+  private rest(agentId: string, always = false) {
+    const s = this.staff.get(agentId)!;
+    const mins = Math.max(0, Number(this.settings.pitchAfterMin ?? 5) || 0);
+    this.idle(agentId, `Free. Pitches an idea if nothing comes in for ${mins} min.`);
+    // already sitting idle (e.g. the box was just ticked): that time counts
+    const wait = Math.max(0, s.since + mins * 60_000 - Date.now());
+    s.restTimer = window.setTimeout(() => {
+      if (this.staff.get(agentId) !== s || s.phase !== 'idle' || s.held || !(s.ideas || always)) return;
+      this.research(agentId, always && !s.ideas ? LOOK_AROUND : undefined, [], true);
+    }, wait);
   }
 
   private backToResearch(agentId: string, message: Content) {
@@ -1110,7 +1139,7 @@ export class RealCrew implements Crew {
         this.bridge.send(agentId, 'Please wrap up now and end with the ```pitch block.');
       } else if (msg.ok) {
         this.note(agentId, "Couldn't come up with a pitch; taking a break");
-        this.emitNow(agentId, 'idle');
+        this.rest(agentId);
       } else this.emitNow(agentId, 'idle', 'Stopped');
       return;
     }

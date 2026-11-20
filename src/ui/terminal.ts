@@ -1,6 +1,6 @@
 import { bus } from '../bus';
 import { DEFAULT_SETTINGS, engineIn, modelLabel } from '../agents/crew';
-import type { AgentActivity, Question, Settings, Team, TermEntry } from '../agents/types';
+import type { AgentActivity, Idea, Picture, Question, Settings, Team, TermEntry } from '../agents/types';
 import { el } from './dom';
 import { labelOf, type AgentView, type ApprovalView } from './hud';
 import { raise } from './panels';
@@ -448,8 +448,22 @@ class Term {
     return approvals.find((p) => ids.includes(p.id));
   }
 
+  /** Someone here waiting with an idea, when nothing more urgent is asked. */
+  private pitchUp(ids = this.members()): { id: string; name: string; idea: Idea } | null {
+    if (this.pending(ids)) return null;
+    const v = ids.map((id) => viewOf(id)!).find((x) => x.status.pitch);
+    return v ? { id: v.id, name: v.name, idea: v.status.pitch! } : null;
+  }
+
   private renderAsk(ids: string[]) {
     const p = this.pending(ids);
+    const pitch = p ? null : this.pitchUp(ids);
+    if (pitch) {
+      const key = `pitch|${pitch.id}|${pitch.idea.title}|${this.choice}`;
+      if (key === this.askKey) return;
+      this.askKey = key;
+      return this.renderPitch(pitch.name, pitch.idea);
+    }
     const quizKey = p?.ask?.kind === 'question' ? `${p.id}|${p.detail}` : '';
     if (this.quiz?.key !== quizKey) this.quiz = quizKey ? { key: quizKey, at: 0, answers: {}, picked: new Set() } : null;
     const key = p ? `${p.id}|${p.detail}|${this.choice}|${this.quiz ? `${this.quiz.at}:${[...this.quiz.picked]}` : ''}` : '';
@@ -475,6 +489,34 @@ class Term {
     this.input.placeholder = 'Press 1 or 2 (or ↑↓ and Enter)';
     const stick = this.screen.scrollHeight - this.screen.scrollTop - this.screen.clientHeight < 120;
     if (stick) this.screen.scrollTop = this.screen.scrollHeight;
+  }
+
+  /** Their idea, the way Claude Code shows a plan: yes, no, or type what to do instead. */
+  private renderPitch(name: string, idea: Idea) {
+    this.choice = Math.min(this.choice, 1);
+    const head = el('div', 't-q-head');
+    head.append(el('span', 't-q-chip', 'Pitch'), el('span', 'dim', ` ${idea.project}${idea.path ? '' : ' (new project)'}`));
+    const title = el('b', undefined, `${name}: ${idea.title}`);
+    const body = el('div', 't-ask-what');
+    body.append(md(idea.summary));
+    if (idea.steps.length) body.append(el('div', 'dim', idea.steps.map((t) => `  • ${t}`).join('\n')));
+    const options = ['Yes, go ahead', 'No, pass on it'].map((label, i) => {
+      const o = el('div', `t-opt${i === this.choice ? ' on' : ''}`, `${i === this.choice ? '❯' : ' '} ${i + 1}. ${label}`);
+      o.onclick = () => this.decide(i === 0);
+      return o;
+    });
+    const hint = el('div', 'dim', 'Or type what they should do instead');
+    this.ask.replaceChildren(head, title, body, el('div', undefined, 'Should they do it?'), ...options, hint);
+    this.input.placeholder = 'Press 1 or 2 (or ↑↓ and Enter), or type what to do instead';
+    if (this.screen.scrollHeight - this.screen.scrollTop - this.screen.clientHeight < 200) this.screen.scrollTop = this.screen.scrollHeight;
+  }
+
+  private decide(ok: boolean, instead?: string, pictures?: Picture[]) {
+    const pitch = this.pitchUp();
+    if (!pitch) return;
+    const decision = instead !== undefined ? { kind: 'instead', text: instead, pictures } : { kind: ok ? 'approve' : 'reject' };
+    bus.emit('pitch:decide', { id: pitch.id, decision });
+    this.choice = 0;
   }
 
   private answer(ok: boolean) {
@@ -610,6 +652,21 @@ class Term {
         return this.answer(false);
       }
     }
+    if (!asking && empty && this.pitchUp()) {
+      if (e.key === '1' || e.key === '2') {
+        e.preventDefault();
+        return this.decide(e.key === '1');
+      }
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        this.choice = this.choice ? 0 : 1;
+        return this.renderAsk(this.members());
+      }
+      if (e.key === 'Enter' && !e.shiftKey && !this.pics.count) {
+        e.preventDefault();
+        return this.decide(this.choice === 0);
+      }
+    }
     if (asking && empty && !quiz) {
       if (e.key === '1' || e.key === '2') {
         e.preventDefault();
@@ -688,6 +745,9 @@ class Term {
     const pictures = this.pics.take();
     if (!text && !pictures.length) return;
     text ||= 'Have a look at this picture.';
+    // an idea on the table: what's typed is "not that, do this instead"
+    const pitch = this.pitchUp();
+    if (pitch && !at && (!target || target === pitch.id)) return this.decide(false, text, pictures);
     // no @: the whole team hears it, and the manager decides what happens
     if (target) bus.emit('agent:say', { id: target, text, pictures });
     else bus.emit('team:say', { id: this.teamId, text, pictures });
@@ -706,7 +766,8 @@ class Term {
           '/clear clears this screen (they still remember everything)',
           '/stop interrupts what they are doing',
           '/hold puts them on hold · /reopen brings them back',
-          `/ideas on|off: whether ${this.teamId ? 'the manager comes' : 'they come'} up with ideas when there's nothing to do`,
+          `/ideas on|off: whether ${this.teamId ? 'the manager pitches' : 'they pitch'} an idea after ${settings.pitchAfterMin ?? 5} min with nothing to do`,
+          'A pitch shows here: 1 approves, 2 passes, or type what to do instead',
           '/model shows the models · /model <name> switches',
         ].forEach((l) => this.print(l));
         return;

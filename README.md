@@ -21,19 +21,20 @@ npm run dist:linux   # Linux AppImage
 
 New hires sit **idle** until you give them something to do: message them, or tick
 **Come up with ideas** in their panel (or type `/ideas on` in their terminal). Ticked,
-they loop through the cycle below on their own; unticked, they stop looking for ideas and
-go back to idle once their current job is done.
+they loop through the cycle below on their own, but only once you've left them with nothing
+to do for 5 minutes (change it under *Settings → Pitches*); a message from you in that time
+puts them to work on that instead. Unticked, they stop looking for ideas and go back to idle
+once their current job is done.
 
 1. **Research**: looks through the folders in `~/proiecte` (in the conference room and the archive).
 2. **Queue**: walks to the line outside Ahmad's office. One pitches at a time, three
    wait at the door, the rest wait at their desks.
-3. **Pitch**: stands at Ahmad's desk. The *Office* panel shows the idea, the
-   plan and the git branch it would use. You can:
-   - **Approve**: they go and do it, on its own branch.
-   - **Don't approve**: they go back and come up with something else (or go idle, if
-     *Come up with ideas* isn't ticked).
-   - **Tell them what to do instead** (in the pitch card, or by messaging them while they
-     pitch): they work out which project you mean, or start a new one, and get going
+3. **Pitch**: stands at Ahmad's desk. The idea and its plan show in their terminal (and the
+   team's), Claude Code style, and in the *Office* panel. You can:
+   - **Approve** (1 in the terminal): they go and do it, on its own branch.
+   - **Don't approve** (2): they go back to idle, and pitch something else only after
+     another stretch with nothing to do.
+   - **Tell them what to do instead** (type it in their terminal, or in the pitch card): they work out which project you mean, or start a new one, and get going
      without pitching again.
 4. **Work**: types at their desk, runs things at the mainframe, and asks before risky
    commands (the *OKs* panel), then drops the result in the mail room outbox.
@@ -43,8 +44,8 @@ go back to idle once their current job is done.
 ### Teams
 
 *New team...* groups people you've hired: one **manager** and any number of **workers**.
-Give the team a task, or leave it empty and the manager researches and pitches an idea
-big enough for the team. Once the work starts:
+Give the team a task, or leave it empty and, if you give them nothing for a few minutes,
+the manager researches and pitches an idea big enough for the team. Once the work starts:
 
 - The manager plans it and hands each worker a piece.
 - Each worker builds on their own branch, started from the team's branch, and reports
@@ -131,10 +132,12 @@ what happens; start with `@Name` for one person. Teammates talk to each other to
 dragged, resized and minimized, and the history is kept between runs.
 
 **Terminal view** (the `>_` icon in the top bar, or **T**): the office as nothing but
-terminals. Group terminals across the top, everyone's own below. Click one to zoom in and
-work in it; Esc (with an empty prompt), the ⊖ button or Ctrl + scroll down zooms back out,
-Ctrl + scroll up over a terminal zooms into it. The tabs along the top jump straight to any
-terminal and flag the ones waiting on you; *Create group* puts agents together. The panels
+terminals, laid out like tmux. Group terminals across the top, everyone's own below. Click
+one to zoom in and work in it; Esc (with an empty prompt), `[esc] all` or Ctrl + scroll down
+zooms back out, Ctrl + scroll up over a terminal zooms into it. The numbered tabs along the
+top jump straight to any terminal (Alt + its number) and flag the ones waiting on you, a
+pitch included; the line along the bottom counts who's busy and what's waiting. `[+] new
+group` puts agents together. The panels
 step aside while it's on (their icons still open them) and come back when you switch to the
 office. The app remembers which view you were in.
 

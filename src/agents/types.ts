@@ -117,6 +117,8 @@ export interface Settings {
    * 'full': nothing is checked or asked (bypass permissions).
    */
   approvals: 'auto' | 'ask' | 'full';
+  /** Minutes someone with nothing to do waits before going looking for an idea to pitch. */
+  pitchAfterMin: number;
   /** On closing with work in progress. */
   onClose: 'ask' | 'finish' | 'stop';
 }
@@ -144,6 +146,8 @@ export interface AgentStatus {
   engine: string;
   /** Ticked: when there's nothing to do they look around and pitch ideas. Unticked: they sit idle until told what to do. */
   ideas: boolean;
+  /** The idea they're waiting to pitch, shown in their terminal to answer there. */
+  pitch?: Idea | null;
 }
 
 /** One line of an agent's terminal, shown the way Claude Code shows it. */

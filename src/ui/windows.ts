@@ -149,6 +149,17 @@ function initSettings() {
       return box;
     };
 
+    const pitchAfter = el('input');
+    pitchAfter.type = 'number';
+    pitchAfter.min = '0';
+    pitchAfter.max = '240';
+    pitchAfter.step = '1';
+    pitchAfter.value = String(draft.pitchAfterMin ?? 5);
+    pitchAfter.style.width = '6em';
+    pitchAfter.oninput = () => (draft.pitchAfterMin = Math.min(240, Math.max(0, Math.round(Number(pitchAfter.value) || 0))));
+    const pitchRow = el('label', 'check');
+    pitchRow.append('Pitch only after ', pitchAfter, ' minutes with nothing to do');
+
     renderEngines();
     renderDefaults();
     const save = el('button', undefined, 'Save');
@@ -181,6 +192,9 @@ function initSettings() {
         ['full', 'Full access (bypass permissions): nothing is checked or asked. Agents can do anything on this PC, deleting files included'],
       ], (v) => (draft.approvals = v)),
       el('p', 'hint', 'Whichever you pick, researching agents only read, and questions and plugin installs always come to you.'),
+      el('h4', undefined, 'Pitches'),
+      pitchRow,
+      el('p', 'hint', 'Agents with "Come up with ideas" ticked only go looking for an idea once you have left them with nothing to do this long. The pitch shows up in their terminal: 1 to approve, 2 to pass, or type what to do instead.'),
       el('h4', undefined, 'Closing with work in progress'),
       radios('onclose', draft.onClose, [['ask', 'Ask me'], ['finish', 'Let them finish in the background'], ['stop', 'Stop them and close']], (v) => (draft.onClose = v)),
       buttons,

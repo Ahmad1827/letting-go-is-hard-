@@ -34,6 +34,8 @@ const DEFAULTS = {
   defaultSkills: [],
   /** 'auto': Claude Code's auto mode decides what's safe; 'ask': anything that changes files asks first. */
   approvals: 'auto',
+  /** Minutes with nothing to do before someone goes looking for an idea to pitch. */
+  pitchAfterMin: 5,
   /** On closing with work in progress: 'ask', 'finish' in the background, or 'stop'. */
   onClose: 'ask',
 };

@@ -351,7 +351,7 @@ function initTeams() {
     }
     const task = el('textarea');
     task.rows = 3;
-    task.placeholder = 'Optional. Leave empty and the manager will look around and pitch an idea for the team. You can paste pictures here.';
+    task.placeholder = 'Optional. Leave empty and, if you give them nothing for a few minutes, the manager pitches an idea for the team. You can paste pictures here.';
     const pics = acceptPictures(task);
     const error = el('p', 'error');
     const create = el('button', undefined, 'Create team');
@@ -741,7 +741,7 @@ export function initHud() {
     ideas.type = 'checkbox';
     ideas.checked = a.status.ideas;
     ideas.onchange = () => bus.emit('agent:ideas', { id: a.id, on: ideas.checked });
-    ideasRow.title = `Ticked: when ${a.name} has nothing to do, they look through the projects and pitch ideas. Unticked: they stay idle until you message them.`;
+    ideasRow.title = `Ticked: when ${a.name} is left with nothing to do for a few minutes (see Settings), they look through the projects and pitch an idea in their terminal. Unticked: they stay idle until you message them.`;
     ideasRow.append(ideas, el('span', undefined, 'Come up with ideas'));
 
     const skillTags = el('div', 'skill-tags');

@@ -100,7 +100,7 @@ export class Sim implements Crew {
 
   statusOf(agentId: string): AgentStatus {
     const run = this.runs.get(agentId)!;
-    return { phase: run.pitched ? 'pitching' : run.phase, since: run.since, project: run.idea?.project ?? null, branch: run.phase === 'work' ? run.idea?.branch ?? null : null, engine: run.engine, ideas: run.ideas };
+    return { phase: run.pitched ? 'pitching' : run.phase, since: run.since, project: run.idea?.project ?? null, branch: run.phase === 'work' ? run.idea?.branch ?? null : null, engine: run.engine, ideas: run.ideas, pitch: run.phase === 'queued' ? run.idea : null };
   }
 
   workingCount() {
@@ -226,10 +226,12 @@ export class Sim implements Crew {
   /** The owner's answer to the pitch currently in the office. */
   decide(agentId: string, d: Decision) {
     const run = this.runs.get(agentId);
-    if (!run || this.line[0] !== agentId || !run.idea) return;
-    this.line.shift();
+    if (!run || !this.line.includes(agentId) || !run.idea) return;
+    if (this.line[0] === agentId && run.pitched) this.hooks.pitch(null, null);
+    this.line = this.line.filter((x) => x !== agentId);
     run.pitched = false;
-    this.hooks.pitch(null, null);
+    run.place = 0;
+    run.timer?.remove();
     const idea = run.idea;
     run.seen.add(idea.title);
     if (d.kind === 'approve') {

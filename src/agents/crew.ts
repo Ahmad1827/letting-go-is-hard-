@@ -92,7 +92,7 @@ export interface Crew {
   resolve(agentId: string, approved: boolean): void;
   /** Answer the questions they asked: the chosen option (or typed answer) for each question, by its text. */
   answer(agentId: string, answers: Record<string, string>): void;
-  /** Answer the pitch currently in the office. */
+  /** Answer someone's pitch: the one in the office, or anyone's waiting in line (from their terminal). */
   decide(agentId: string, d: Decision): void;
   /** A message from the owner, typed in the Properties panel. */
   say(agentId: string, text: string, pictures?: Picture[]): void;
@@ -144,6 +144,7 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultModel: '',
   defaultSkills: [],
   approvals: 'auto',
+  pitchAfterMin: 5,
   onClose: 'ask',
 };
 

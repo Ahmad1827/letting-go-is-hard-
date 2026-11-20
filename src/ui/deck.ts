@@ -95,7 +95,7 @@ function needs(key: string) {
     const t = teams.find((x) => x.id === key.slice(2));
     return t ? [t.manager, ...t.workers] : [];
   })();
-  return approvals.some((p) => ids.includes(p.id));
+  return approvals.some((p) => ids.includes(p.id)) || agents.some((a) => ids.includes(a.id) && !!a.status.pitch);
 }
 
 function zoom(key: string | null) {
@@ -108,17 +108,25 @@ function zoom(key: string | null) {
   if (key) window.setTimeout(() => tiles.get(key)?.term.focus(), 30);
 }
 
+/** Tabs in order, so Alt + a number jumps to one, tmux style. */
+let order: (string | null)[] = [null];
+
 function tab(key: string | null, label: string, dot?: string, title?: string) {
   const b = el('button', `deck-tab${zoomed === key ? ' on' : ''}${key?.startsWith('t:') ? ' team' : ''}`);
   b.setAttribute('role', 'tab');
   b.setAttribute('aria-selected', String(zoomed === key));
+  const n = order.length;
+  order.push(key);
+  b.append(el('span', 'num', `${n}:`));
   if (dot) {
     const d = el('span', 'dot');
     d.style.background = dot;
     b.append(d);
   }
   b.append(el('span', undefined, label));
+  if (zoomed === key) b.append(el('span', 'mark', '*'));
   if (key && needs(key)) b.append(el('b', 'flag', '!'));
+  if (n < 10) title = `${title ?? label} (Alt+${n})`;
   if (title) b.title = title;
   b.onclick = () => zoom(key);
   return b;
@@ -127,10 +135,11 @@ function tab(key: string | null, label: string, dot?: string, title?: string) {
 let tabsKey = '';
 function renderTabs() {
   const views = new Map(agents.map((a) => [a.id, a]));
-  const key = JSON.stringify([zoomed, teams.map((t) => [t.id, t.name]), agents.map((a) => [a.id, a.name, a.activity, a.status.phase]), approvals.map((p) => p.id)]);
+  const key = JSON.stringify([zoomed, teams.map((t) => [t.id, t.name]), agents.map((a) => [a.id, a.name, a.activity, a.status.phase, !!a.status.pitch]), approvals.map((p) => p.id)]);
   if (key === tabsKey) return;
   tabsKey = key;
-  const parts: HTMLElement[] = [tab(null, 'All terminals', undefined, 'Every terminal at once')];
+  order = [];
+  const parts: HTMLElement[] = [tab(null, 'all', undefined, 'Every terminal at once')];
   if (teams.length) parts.push(el('span', 'deck-sep'));
   for (const t of teams) {
     const m = views.get(t.manager);
@@ -141,6 +150,20 @@ function renderTabs() {
   const tabs = byId('deck-tabs');
   tabs.replaceChildren(...parts);
   tabs.querySelector('.deck-tab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  renderStatus();
+}
+
+/** The bottom line, like tmux's: who's doing what, and the time. */
+function renderStatus() {
+  if (!on) return;
+  const count = (f: (a: AgentView) => boolean) => agents.filter(f).length;
+  const busy = count((a) => a.status.phase === 'work' || a.status.phase === 'research');
+  const pitches = count((a) => !!a.status.pitch);
+  const left = [`[office] ${agents.length} agent${agents.length === 1 ? '' : 's'}`, `${teams.length} group${teams.length === 1 ? '' : 's'}`, `${busy} busy`];
+  if (pitches) left.push(`${pitches} pitch${pitches === 1 ? '' : 'es'} waiting`);
+  if (approvals.length) left.push(`${approvals.length} need${approvals.length === 1 ? 's' : ''} you`);
+  byId('deck-status-left').textContent = left.join(' · ');
+  byId('deck-status-right').textContent = `alt+n jump · esc back · ctrl+scroll zoom · t office   ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
 }
 
 function setOn(next: boolean) {
@@ -210,7 +233,18 @@ export function initDeck() {
     { passive: false },
   );
   // T switches views (when not typing)
+  window.setInterval(renderStatus, 15_000);
   window.addEventListener('keydown', (e) => {
+    // Alt + number: straight to that tab, typing or not
+    const digit = /^(?:Digit|Numpad)([0-9])$/.exec(e.code);
+    if (on && digit && e.altKey && !e.ctrlKey && !e.metaKey) {
+      const n = Number(digit[1]);
+      if (n < order.length) {
+        e.preventDefault();
+        zoom(order[n]);
+      }
+      return;
+    }
     const typing = (e.target as HTMLElement | null)?.closest('input, textarea, select, [contenteditable]');
     if (typing || e.ctrlKey || e.altKey || e.metaKey) return;
     if (e.key === 't' || e.key === 'T') setOn(!on);
