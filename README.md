@@ -139,10 +139,13 @@ the top jump straight to any terminal (Alt + its number) and flag the ones waiti
 pitch included; the line along the bottom counts who's busy and what's waiting. `[+] new
 group` puts agents together.
 
-**Themes:** every terminal looks like Claude Code, in one of four themes: *normal* (Claude
-Code's dark theme), *purple* (Windows Terminal's Ubuntu colours), *night* and *light*. Each
-has its own pixel picture in the welcome box: a sun behind a cloud, a sunset, the moon, the
-sun. Switch with the theme button in the terminal view or `/theme` in any terminal.
+**Themes:** the whole app follows one theme: the terminals, the office's panels, and the
+view out of the office window. *normal* (Claude Code dark, the city at night), *purple*
+(Windows Terminal's Ubuntu colours, at dusk), *night* (deep blue, lights low), *light*
+(Claude Code light, in daylight) and *retro* (Windows 95 panels and cmd.exe terminals, in
+daylight). Each has its own pixel picture in the terminals' welcome box: a sun behind a
+cloud, a sunset, the moon, the sun, a floppy disk. Pick one in *Settings → Theme*, with the
+theme button in the terminal view, or with `/theme` in any terminal.
 
 **Commands** in any terminal: `/model`, `/status`, `/cost`, `/skills`, `/engine`, `/stop`,
 `/hold`, `/reopen`, `/ideas`, `/approve`, `/pass`, `/theme`, `/clear`, `/help`. In a group

@@ -4,6 +4,7 @@ import { buildPeople, CAST } from '../art/people';
 import { buildProps } from '../art/props';
 import { buildRooms } from '../art/rooms';
 import { buildBand, GLASS_TOP, MULLION_STEP, MULLION_W, SILL } from '../art/skyline';
+import { savedTheme, SKY, type TermTheme } from '../ui/pixels';
 import { Agent } from '../agents/Agent';
 import { DEFAULT_SETTINGS, type Crew, type CrewHooks, type CrewSave } from '../agents/crew';
 import { RealCrew, type AgentBridge } from '../agents/real';
@@ -139,6 +140,10 @@ export class OfficeScene extends Phaser.Scene {
   private teamList: Team[] = [];
   private keys!: Record<'up' | 'down' | 'left' | 'right' | 'w' | 'a' | 's' | 'd', Phaser.Input.Keyboard.Key>;
   private drag: { x: number; y: number; sx: number; sy: number } | null = null;
+  /** The view out of the window, redrawn when the theme changes. */
+  private band!: Phaser.GameObjects.Image;
+  /** A wash of colour over the floor: lights low at night, a warm tint at dusk. */
+  private shade!: Phaser.GameObjects.Rectangle;
 
   constructor() {
     super('office');
@@ -148,8 +153,11 @@ export class OfficeScene extends Phaser.Scene {
     buildPeople(this);
     buildProps(this);
     buildRooms(this);
-    buildBand(this, WIDTH, 'night'); // always after hours: the city at night, 1990s style
+    buildBand(this, WIDTH, SKY[savedTheme()]); // the city outside, at the time of day the theme picks
     this.drawRoom();
+    this.shade = this.add.rectangle(0, 0, WIDTH, HEIGHT, 0x000000, 0).setOrigin(0).setDepth(100000);
+    this.applyTheme(savedTheme());
+    bus.on('theme', (t: TermTheme) => this.applyTheme(t));
 
     for (const p of props) {
       const s = this.add.sprite(p.x, p.y, p.key).setOrigin(0.5, 1).setDepth(p.depth ?? p.y);
@@ -280,6 +288,19 @@ export class OfficeScene extends Phaser.Scene {
     if (sel) this.ring.setPosition(Math.round(sel.sprite.x), Math.round(sel.sprite.y)).setDepth(sel.sprite.depth - 0.5);
     this.panWithKeys(delta);
     if (this.dirty && time - this.lastPush > 250) this.pushState(time);
+  }
+
+  /** The theme changed: a new view out of the window, and the lights to match. */
+  private applyTheme(theme: TermTheme) {
+    const sky = SKY[theme];
+    if (this.band.getData('sky') !== sky) {
+      this.textures.remove('band');
+      buildBand(this, WIDTH, sky);
+      this.band.setTexture('band').setData('sky', sky);
+    }
+    const wash: Record<TermTheme, [number, number]> = { normal: [0, 0], purple: [0x5a1446, 0.1], night: [0x050a2a, 0.32], light: [0xfff4d8, 0.05], retro: [0, 0] };
+    const [color, alpha] = wash[theme];
+    this.shade.setFillStyle(color, alpha).setVisible(alpha > 0);
   }
 
   // ---------------------------------------------------------------- camera
@@ -451,7 +472,7 @@ export class OfficeScene extends Phaser.Scene {
       const w = (room.x1 - room.x0 + 1) * T, h = (room.y1 - room.y0 + 1) * T;
       this.add.tileSprite(room.x0 * T, room.y0 * T, w, h, room.floor).setOrigin(0).setDepth(-10);
     }
-    this.add.image(0, 0, 'band').setOrigin(0).setDepth(-5);
+    this.band = this.add.image(0, 0, 'band').setOrigin(0).setDepth(-5);
 
     // soft shadows where floors meet walls
     const sh = this.add.graphics().setDepth(-9);

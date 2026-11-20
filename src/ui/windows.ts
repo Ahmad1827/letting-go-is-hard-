@@ -1,4 +1,5 @@
 import { bus } from '../bus';
+import { savedTheme, THEME_LABEL, THEMES, type TermTheme } from './pixels';
 import { DEFAULT_SETTINGS, engineIn, modelLabel } from '../agents/crew';
 import type { EngineConfig, Phase, Settings, Team } from '../agents/types';
 import { OWNER } from '../owner';
@@ -149,6 +150,9 @@ function initSettings() {
       return box;
     };
 
+    // the theme isn't part of the saved settings: it changes the moment it's picked
+    const themeBox = radios('theme', savedTheme(), THEMES.map((t) => [t, THEME_LABEL[t]] as [TermTheme, string]), (t) => bus.emit('theme', t));
+
     const pitchAfter = el('input');
     pitchAfter.type = 'number';
     pitchAfter.min = '0';
@@ -192,6 +196,9 @@ function initSettings() {
         ['full', 'Full access (bypass permissions): nothing is checked or asked. Agents can do anything on this PC, deleting files included'],
       ], (v) => (draft.approvals = v)),
       el('p', 'hint', 'Whichever you pick, researching agents only read, and questions and plugin installs always come to you.'),
+      el('h4', undefined, 'Theme'),
+      themeBox,
+      el('p', 'hint', 'Applies straight away to the office, its panels and every terminal. Also: the theme button in the terminal view, or /theme in any terminal.'),
       el('h4', undefined, 'Pitches'),
       pitchRow,
       el('p', 'hint', 'Agents with "Come up with ideas" ticked only go looking for an idea once you have left them with nothing to do this long. The pitch shows up in their terminal: 1 to approve, 2 to pass, or type what to do instead.'),

@@ -1,13 +1,28 @@
 /**
- * Little pixel-art pictures for the terminals' welcome box, one per theme:
+ * The app's themes (terminals, panels and the view out of the office window
+ * all follow them), and a little pixel-art picture for each, shown in the
+ * terminals' welcome box:
  * a moon and stars at night, the sun in the light theme, the sun peeking out
- * from behind a cloud in the normal one, a sunset over the sea in purple. Drawn on a 16×16 grid as SVG squares,
+ * from behind a cloud in the normal one, a sunset over the sea in purple, a
+ * floppy disk in retro. Drawn on a 16×16 grid as SVG squares,
  * so they stay crisp at any size.
  */
 
-export type TermTheme = 'normal' | 'night' | 'light' | 'purple';
+export type TermTheme = 'normal' | 'night' | 'light' | 'purple' | 'retro';
 
-export const THEMES: TermTheme[] = ['normal', 'purple', 'night', 'light'];
+export const THEMES: TermTheme[] = ['normal', 'purple', 'night', 'light', 'retro'];
+
+/** How each theme is described in Settings. */
+export const THEME_LABEL: Record<TermTheme, string> = {
+  normal: 'Normal: Claude Code dark, the city at night',
+  purple: 'Purple: Windows Terminal (Ubuntu) colours, at dusk',
+  night: 'Night: deep blue, lights low, the moon out',
+  light: 'Light: Claude Code light, in daylight',
+  retro: 'Retro: Windows 95 and cmd.exe, in daylight',
+};
+
+/** What the city outside the office window looks like in each theme. */
+export const SKY: Record<TermTheme, 'day' | 'dusk' | 'night'> = { normal: 'night', purple: 'dusk', night: 'night', light: 'day', retro: 'day' };
 
 const N = 16;
 const SVG = 'http://www.w3.org/2000/svg';
@@ -79,12 +94,31 @@ function sunset(): Grid {
   return g;
 }
 
+/** A 3½-inch floppy disk. */
+function floppy(): Grid {
+  const g = blank();
+  const fill = (x0: number, y0: number, x1: number, y1: number, c: string) => {
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) g[y][x] = c;
+  };
+  fill(2, 2, 13, 13, '#1d3b8a');
+  fill(2, 13, 13, 13, '#132a66');
+  fill(13, 2, 13, 13, '#132a66');
+  g[2][13] = null; // the cut corner
+  fill(5, 2, 10, 6, '#c8ccd2'); // metal shutter
+  fill(8, 3, 9, 5, '#5a606a');
+  fill(4, 8, 11, 13, '#f4f1e6'); // label
+  for (const y of [10, 12]) fill(5, y, 10, y, '#9aa3c0');
+  g[12][3] = '#000000'; // write-protect hole
+  return g;
+}
+
 /** Stars that twinkle (night only). */
 const STARS: [number, number][] = [[13, 2], [11, 12], [14, 8], [2, 2]];
 
 function grid(theme: TermTheme): Grid {
   if (theme === 'night') return moon();
   if (theme === 'purple') return sunset();
+  if (theme === 'retro') return floppy();
   const g = blank();
   if (theme === 'light') sun(g, 7.5, 7.5, 3.6, 2);
   else {

@@ -289,7 +289,7 @@ export function initDeck() {
   byId('deck-out').onclick = () => zoom(null);
   byId('deck-group').onclick = () => bus.emit('team:new');
   // the theme button names the theme it's on, and moves to the next
-  const ICON: Record<TermTheme, string> = { normal: '◐ normal', purple: '▰ purple', night: '☾ night', light: '☀ light' };
+  const ICON: Record<TermTheme, string> = { normal: '◐ normal', purple: '▰ purple', night: '☾ night', light: '☀ light', retro: '▣ retro' };
   const themeBtn = byId('deck-theme');
   const showTheme = (t: TermTheme) => (themeBtn.textContent = ICON[t]);
   showTheme(savedTheme());

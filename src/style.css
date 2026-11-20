@@ -13,6 +13,11 @@
   --green: #36b45a;
   --red: #d04040;
   --blue: #6c8cff;
+  --panel: #0b1030;
+  --page: #05081a;
+  --hover: rgba(108, 140, 255, 0.12);
+  --front-line: #3a4c98;
+  --title: linear-gradient(90deg, rgba(240, 180, 60, 0.16), transparent 70%);
   font-family: Tahoma, 'Segoe UI', Verdana, sans-serif;
   font-size: 12.5px;
   color-scheme: dark;
@@ -24,9 +29,94 @@ html, body {
   margin: 0;
   height: 100%;
   overflow: hidden;
-  background: #05081a;
+  background: var(--page);
   color: var(--ink);
 }
+
+/*
+ * The office follows the theme too (Settings, the terminal view's button, or
+ * /theme): the panels here, and the view out of the window in the scene.
+ */
+body[data-term-theme='night'] {
+  --ink: #c9d2f0;
+  --dim: #6f7aa6;
+  --glass: rgba(4, 7, 20, 0.95);
+  --well: #02040c;
+  --line: #1a2350;
+  --line-hi: #2e3d80;
+  --button: #0d1330;
+  --button-hi: #151d45;
+  --gold: #c9b77a;
+  --panel: #060a1c;
+  --page: #02040c;
+  --front-line: #2e3d80;
+  --title: linear-gradient(90deg, rgba(201, 183, 122, 0.14), transparent 70%);
+}
+body[data-term-theme='purple'] {
+  --ink: #f2e6ee;
+  --dim: #b39aab;
+  --glass: rgba(40, 10, 32, 0.95);
+  --well: #1a0614;
+  --line: #5a2a4e;
+  --line-hi: #8a4a78;
+  --button: #3a1230;
+  --button-hi: #4b1a3f;
+  --gold: #ff9f5e;
+  --amber: #ffb347;
+  --blue: #c08cff;
+  --panel: #300a24;
+  --page: #1a0614;
+  --hover: rgba(255, 143, 94, 0.12);
+  --front-line: #8a4a78;
+  --title: linear-gradient(90deg, rgba(255, 143, 94, 0.2), transparent 70%);
+}
+body[data-term-theme='light'] {
+  --ink: #1f1e1d;
+  --dim: #6b6a65;
+  --glass: rgba(250, 249, 245, 0.96);
+  --well: #ffffff;
+  --line: #c9c6bd;
+  --line-hi: #e6e3da;
+  --button: #ece9e1;
+  --button-hi: #e0ddd2;
+  --gold: #c15f3c;
+  --amber: #c96a00;
+  --green: #2e8b48;
+  --red: #c4314b;
+  --blue: #4a5bd4;
+  --panel: #faf9f5;
+  --page: #e8e6dc;
+  --hover: rgba(193, 95, 60, 0.1);
+  --front-line: #b0ab9e;
+  --title: linear-gradient(90deg, rgba(193, 95, 60, 0.14), transparent 70%);
+  color-scheme: light;
+}
+/* Windows 95: grey 3D buttons, navy title bars */
+body[data-term-theme='retro'] {
+  --ink: #000000;
+  --dim: #505050;
+  --glass: #c0c0c0;
+  --well: #ffffff;
+  --line: #808080;
+  --line-hi: #ffffff;
+  --button: #c0c0c0;
+  --button-hi: #d4d0c8;
+  --gold: #000080;
+  --amber: #a05000;
+  --green: #008000;
+  --red: #a00000;
+  --blue: #000080;
+  --panel: #c0c0c0;
+  --page: #008080;
+  --hover: rgba(0, 0, 128, 0.12);
+  --front-line: #000000;
+  --title: linear-gradient(90deg, #000080, #1084d0);
+  --title-ink: #ffffff;
+  color-scheme: light;
+}
+body[data-term-theme='light'] button.primary, body[data-term-theme='light'] button.danger,
+body[data-term-theme='retro'] button.primary, body[data-term-theme='retro'] button.danger { color: #fff; }
+body[data-term-theme='retro'] .panel, body[data-term-theme='retro'] .modal, body[data-term-theme='retro'] #dock { box-shadow: 1px 1px 0 #000; }
 
 /* the office, edge to edge */
 #game { position: fixed; inset: 0; }
@@ -113,7 +203,7 @@ input[type='checkbox'], input[type='radio'] { accent-color: var(--gold); }
 #dock.collapsed #dock-toggle svg { transform: rotate(90deg); }
 
 .tab { background: transparent; border-color: transparent; color: var(--dim); }
-.tab:hover:not(:disabled) { background: rgba(108, 140, 255, 0.12); color: var(--ink); }
+.tab:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
 .tab svg { display: block; transition: transform 0.18s cubic-bezier(0.3, 1.6, 0.5, 1); }
 .tab:hover svg { transform: translateY(-2px); }
 .tab.on { color: var(--gold); }
@@ -168,13 +258,13 @@ input[type='checkbox'], input[type='radio'] { accent-color: var(--gold); }
   flex-direction: column;
   max-width: calc(100vw - 24px);
   /* solid, so overlapping windows don't show through each other */
-  background: #0b1030;
+  background: var(--panel);
   border: 2px solid var(--line);
   border-top-color: var(--line-hi);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(0, 0, 0, 0.6);
   animation: win-open 0.32s cubic-bezier(0.2, 1.25, 0.4, 1) both;
 }
-.panel.front { border-color: #3a4c98; border-top-color: var(--gold); }
+.panel.front { border-color: var(--front-line); border-top-color: var(--gold); }
 .panel.closing { animation: win-close 0.2s cubic-bezier(0.6, 0, 0.9, 0.4) both; pointer-events: none; }
 .panel.dragging { box-shadow: 0 22px 50px rgba(0, 0, 0, 0.6); opacity: 0.94; }
 .panel.dragging header { cursor: grabbing; }
@@ -210,14 +300,15 @@ input[type='checkbox'], input[type='radio'] { accent-color: var(--gold); }
   align-items: center;
   justify-content: space-between;
   padding: 6px 6px 6px 10px;
-  background: linear-gradient(90deg, rgba(240, 180, 60, 0.16), transparent 70%);
+  background: var(--title);
   border-bottom: 1px solid var(--line);
   font: bold 12px Consolas, 'Courier New', monospace;
   letter-spacing: 2px;
   text-transform: uppercase;
-  color: var(--gold);
+  color: var(--title-ink, var(--gold));
   white-space: nowrap;
 }
+body[data-term-theme='retro'] .x { color: #fff; }
 .x { min-width: 0; width: 22px; height: 22px; padding: 0; line-height: 16px; font-size: 15px; background: transparent; border-color: transparent; color: var(--dim); }
 .x:hover:not(:disabled) { color: var(--ink); background: rgba(108, 140, 255, 0.2); }
 .x[data-close]:hover:not(:disabled), .modal .x:hover:not(:disabled) { background: rgba(208, 64, 64, 0.45); }
@@ -256,7 +347,7 @@ input[type='checkbox'], input[type='radio'] { accent-color: var(--gold); }
 }
 .list li { display: flex; align-items: center; gap: 7px; padding: 4px 6px; }
 #agent-list li { cursor: pointer; transition: background 0.1s; }
-#agent-list li:hover { background: rgba(108, 140, 255, 0.12); }
+#agent-list li:hover { background: var(--hover); }
 #agent-list li.sel { background: rgba(240, 180, 60, 0.18); box-shadow: inset 3px 0 var(--gold); }
 .list li.empty { color: var(--dim); }
 .list .status { margin-left: auto; color: var(--dim); font-size: 11.5px; }
@@ -266,7 +357,7 @@ input[type='checkbox'], input[type='radio'] { accent-color: var(--gold); }
 .dot { width: 9px; height: 9px; flex: none; border: 1px solid rgba(0, 0, 0, 0.6); }
 
 .role { font-size: 10px; padding: 0 5px; border: 1px solid var(--line-hi); text-transform: uppercase; letter-spacing: 0.5px; }
-.role.manager { background: var(--gold); color: #000; border-color: var(--gold); }
+.role.manager { background: var(--gold); color: var(--panel); border-color: var(--gold); }
 .role.worker { color: var(--dim); }
 
 .requests li { flex-direction: column; align-items: stretch; gap: 5px; padding: 6px; border-bottom: 1px dashed var(--line); }
@@ -369,7 +460,7 @@ input[type='checkbox'], input[type='radio'] { accent-color: var(--gold); }
 .skills-list { flex: 1; min-height: 120px; overflow-y: auto; background: var(--well); border: 1px solid var(--line); padding: 2px 6px 6px; }
 .skills-list h4 { margin: 8px 0 3px; color: var(--gold); font: bold 11.5px Consolas, monospace; letter-spacing: 1.5px; text-transform: uppercase; }
 .skill { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 6px; padding: 4px 2px; cursor: pointer; }
-.skill:hover { background: rgba(108, 140, 255, 0.12); }
+.skill:hover { background: var(--hover); }
 .skill input { grid-row: span 2; align-self: start; margin-top: 2px; }
 .skill b { overflow-wrap: anywhere; }
 .skill .hint { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
@@ -481,6 +572,31 @@ body[data-term-theme='purple'] {
   --t-deck: #1a0614;
   --t-line: #4a2a42;
 }
+body[data-term-theme='retro'] {
+  --t-bg: #000000;
+  --t-ink: #c0c0c0;
+  --t-hi: #ffffff;
+  --t-dim: #808080;
+  --t-rule: #808080;
+  --t-accent: #ffff55;
+  --t-ok: #55ff55;
+  --t-warn: #ffff55;
+  --t-pick: #55ffff;
+  --t-err: #ff5555;
+  --t-bar: #000080;
+  --t-border: #c0c0c0;
+  --t-front: #ffffff;
+  --t-hover: #000060;
+  --t-user: #202020;
+  --t-from: #101040;
+  --t-code: #000000;
+  --t-ph: #606060;
+  --t-deck: #008080;
+  --t-line: #c0c0c0;
+}
+body[data-term-theme='retro'] .term-win { font-family: 'Lucida Console', 'Courier New', monospace; border-radius: 0; }
+body[data-term-theme='retro'] .term-tab { background: var(--t-bar); color: #fff; border-radius: 0; }
+body[data-term-theme='retro'] .term-banner { border-radius: 0; }
 body[data-term-theme='night'] {
   --t-bg: #0b1122;
   --t-ink: #cdd6f0;
