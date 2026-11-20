@@ -3,6 +3,7 @@ import type { Team } from '../agents/types';
 import { byId, el } from './dom';
 import { DOT, labelOf, type AgentView, type ApprovalView } from './hud';
 import { NAMES, panels, type PanelName } from './panels';
+import { savedTheme, THEMES, type TermTheme } from './pixels';
 import { dockTerm, type Term } from './terminal';
 
 /**
@@ -10,10 +11,14 @@ import { dockTerm, type Term } from './terminal';
  * in the top row (a message there goes to the whole group), everyone's own
  * terminal below. Click one to zoom in and work in it; Esc, the ⊖ button or
  * Ctrl + scroll down zooms back out. The tabs along the top jump straight to
- * any of them.
+ * any of them. Drag a terminal in the overview to move it; the order is kept.
  */
 
 const KEY = 'lgih.view';
+/** The order the terminals were dragged into. */
+const ORDER_KEY = 'lgih.deck.order';
+/** How far the mouse has to move before a press on a terminal becomes a drag rather than a click. */
+const DRAG_PX = 6;
 
 interface Tile { key: string; box: HTMLElement; term: Term }
 
@@ -37,12 +42,96 @@ function animate(change: () => void) {
   else change();
 }
 
-/** Who and what should have a terminal, groups first. */
-function wanted(): { key: string; agentId: string | null; teamId: string | null; row: 'groups' | 'people' }[] {
-  return [
-    ...teams.map((t) => ({ key: `t:${t.id}`, agentId: null, teamId: t.id, row: 'groups' as const })),
-    ...agents.map((a) => ({ key: `a:${a.id}`, agentId: a.id, teamId: null, row: 'people' as const })),
-  ];
+let arranged: string[] = [];
+try {
+  arranged = JSON.parse(localStorage.getItem(ORDER_KEY) ?? '[]') ?? [];
+} catch {
+  arranged = [];
+}
+
+/** In the order they were dragged into; anyone new goes at the end. */
+function inOrder<T>(list: T[], keyOf: (x: T) => string) {
+  const rank = (x: T) => {
+    const i = arranged.indexOf(keyOf(x));
+    return i < 0 ? Infinity : i;
+  };
+  return list.map((x, i) => ({ x, i })).sort((a, b) => rank(a.x) - rank(b.x) || a.i - b.i).map(({ x }) => x);
+}
+
+/** Who and what should have a terminal: groups first, unless they were dragged elsewhere. */
+function wanted(): { key: string; agentId: string | null; teamId: string | null }[] {
+  return inOrder(
+    [
+      ...teams.map((t) => ({ key: `t:${t.id}`, agentId: null, teamId: t.id })),
+      ...agents.map((a) => ({ key: `a:${a.id}`, agentId: a.id, teamId: null })),
+    ],
+    (w) => w.key,
+  );
+}
+
+/** When a drag last ended: the click that follows it isn't a zoom. */
+let droppedAt = 0;
+
+/** Press and drag a terminal (in the overview) to move it among the others in its row. */
+function draggable(box: HTMLElement) {
+  box.addEventListener('pointerdown', (e) => {
+    if (zoomed || e.button !== 0) return;
+    const sx = e.clientX, sy = e.clientY;
+    let lifted = false;
+    let target: HTMLElement | null = null;
+    let before = false;
+    const mark = () => {
+      document.querySelectorAll('.tile.drop-before, .tile.drop-after').forEach((t) => t.classList.remove('drop-before', 'drop-after'));
+      target?.classList.add(before ? 'drop-before' : 'drop-after');
+    };
+    const move = (ev: PointerEvent) => {
+      const dx = ev.clientX - sx, dy = ev.clientY - sy;
+      if (!lifted) {
+        if (Math.hypot(dx, dy) < DRAG_PX) return;
+        lifted = true;
+        box.classList.add('lifted');
+        box.style.pointerEvents = 'none';
+        document.body.classList.add('dragging-tile');
+      }
+      box.style.transform = `translate(${dx}px, ${dy}px) scale(1.02)`;
+      const under = document.elementFromPoint(ev.clientX, ev.clientY)?.closest<HTMLElement>('.tile') ?? null;
+      target = under && under !== box ? under : null;
+      if (target) {
+        const r = target.getBoundingClientRect();
+        before = ev.clientX < r.left + r.width / 2;
+      }
+      mark();
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      if (!lifted) return;
+      droppedAt = Date.now();
+      const drop = target;
+      target = null;
+      mark();
+      document.body.classList.remove('dragging-tile');
+      box.classList.remove('lifted');
+      box.style.pointerEvents = '';
+      box.style.transform = '';
+      if (!drop) return;
+      animate(() => {
+        drop.parentElement!.insertBefore(box, before ? drop : drop.nextSibling);
+        arranged = [...grid().querySelectorAll<HTMLElement>(':scope > .tile')].map((t) => t.dataset.key!);
+        try {
+          localStorage.setItem(ORDER_KEY, JSON.stringify(arranged));
+        } catch {
+          // not remembered: fine
+        }
+        tabsKey = '';
+        renderTabs();
+      });
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+  });
 }
 
 function sync() {
@@ -62,17 +151,16 @@ function sync() {
     const box = el('div', 'tile');
     box.dataset.key = w.key;
     box.style.setProperty('view-transition-name', `tile-${w.key.replace(/[^\w-]/g, '-')}`);
-    // in the overview a click anywhere on it zooms in
-    box.addEventListener('click', () => zoomed !== w.key && zoom(w.key), true);
-    byId(`deck-${w.row}`).append(box);
+    // in the overview a click anywhere on it zooms in; a drag moves it
+    box.addEventListener('click', () => Date.now() - droppedAt > 250 && zoomed !== w.key && zoom(w.key), true);
+    draggable(box);
+    grid().append(box);
     tiles.set(w.key, { key: w.key, box, term: dockTerm(box, w.agentId, w.teamId) });
   }
-  // keep them in the same order as the tabs, without moving the one being typed in
-  for (const row of ['groups', 'people'] as const) {
-    const parent = byId(`deck-${row}`);
-    const order = want.filter((w) => w.row === row).map((w) => tiles.get(w.key)!.box);
-    if (order.some((b, i) => parent.children[i] !== b)) parent.append(...order);
-  }
+  // keep them in the same order as the tabs
+  const boxes = want.map((w) => tiles.get(w.key)!.box);
+  const shown = [...grid().querySelectorAll(':scope > .tile')];
+  if (boxes.some((b, i) => shown[i] !== b)) grid().append(...boxes);
   if (zoomed && !tiles.has(zoomed)) zoomed = null;
   byId('deck-empty').hidden = tiles.size > 0;
   layout();
@@ -85,7 +173,6 @@ function layout() {
     t.box.classList.toggle('big', t.key === zoomed);
     t.box.classList.toggle('need', needs(t.key));
   }
-  for (const row of ['groups', 'people'] as const) byId(`deck-${row}`).classList.toggle('has-big', !!zoomed && zoomed.startsWith(row === 'groups' ? 't:' : 'a:'));
   byId('deck-out').hidden = !zoomed;
 }
 
@@ -141,12 +228,12 @@ function renderTabs() {
   order = [];
   const parts: HTMLElement[] = [tab(null, 'all', undefined, 'Every terminal at once')];
   if (teams.length) parts.push(el('span', 'deck-sep'));
-  for (const t of teams) {
+  for (const t of inOrder(teams, (x) => `t:${x.id}`)) {
     const m = views.get(t.manager);
     parts.push(tab(`t:${t.id}`, t.name, m ? DOT[m.activity] : undefined, `${t.name}: message everyone in the group`));
   }
   if (agents.length) parts.push(el('span', 'deck-sep'));
-  for (const a of agents) parts.push(tab(`a:${a.id}`, a.name, DOT[a.activity], `${a.name}: ${labelOf(a)}`));
+  for (const a of inOrder(agents, (x) => `a:${x.id}`)) parts.push(tab(`a:${a.id}`, a.name, DOT[a.activity], `${a.name}: ${labelOf(a)}`));
   const tabs = byId('deck-tabs');
   tabs.replaceChildren(...parts);
   tabs.querySelector('.deck-tab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -159,10 +246,10 @@ function renderStatus() {
   const count = (f: (a: AgentView) => boolean) => agents.filter(f).length;
   const busy = count((a) => a.status.phase === 'work' || a.status.phase === 'research');
   const pitches = count((a) => !!a.status.pitch);
-  const left = [`[office] ${agents.length} agent${agents.length === 1 ? '' : 's'}`, `${teams.length} group${teams.length === 1 ? '' : 's'}`, `${busy} busy`];
+  const left = [`${agents.length} agent${agents.length === 1 ? '' : 's'}`, `${teams.length} group${teams.length === 1 ? '' : 's'}`, `${busy} busy`];
   if (pitches) left.push(`${pitches} pitch${pitches === 1 ? '' : 'es'} waiting`);
   if (approvals.length) left.push(`${approvals.length} need${approvals.length === 1 ? 's' : ''} you`);
-  byId('deck-status-left').textContent = left.join(' · ');
+  byId('deck-status-left').replaceChildren(el('b', undefined, '✻ office  '), left.join(' · '));
   byId('deck-status-right').textContent = `alt+n jump · esc back · ctrl+scroll zoom · t office   ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
 }
 
@@ -201,14 +288,22 @@ export function initDeck() {
   byId('view-toggle').onclick = () => setOn(!on);
   byId('deck-out').onclick = () => zoom(null);
   byId('deck-group').onclick = () => bus.emit('team:new');
+  // the theme button names the theme it's on, and moves to the next
+  const ICON: Record<TermTheme, string> = { normal: '◐ normal', purple: '▰ purple', night: '☾ night', light: '☀ light' };
+  const themeBtn = byId('deck-theme');
+  const showTheme = (t: TermTheme) => (themeBtn.textContent = ICON[t]);
+  showTheme(savedTheme());
+  themeBtn.onclick = () => bus.emit('theme', THEMES[(THEMES.indexOf(savedTheme()) + 1) % THEMES.length]);
+  bus.on('theme', (t: TermTheme) => showTheme(t));
   bus.on('deck:out', () => zoom(null));
+  // after everyone else has heard: a new group's terminal must already know the group, or it closes itself
   bus.on('agents', (views: AgentView[]) => {
     agents = views;
-    sync();
+    queueMicrotask(sync);
   });
   bus.on('teams', (list: Team[]) => {
     teams = list;
-    sync();
+    queueMicrotask(sync);
   });
   bus.on('approvals', (list: ApprovalView[]) => {
     approvals = list;

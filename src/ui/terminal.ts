@@ -2,9 +2,10 @@ import { bus } from '../bus';
 import { DEFAULT_SETTINGS, engineIn, modelLabel } from '../agents/crew';
 import type { AgentActivity, Idea, Picture, Question, Settings, Team, TermEntry } from '../agents/types';
 import { el } from './dom';
-import { labelOf, type AgentView, type ApprovalView } from './hud';
+import { LABEL, labelOf, type AgentView, type ApprovalView } from './hud';
 import { raise } from './panels';
 import { acceptPictures } from './paste';
+import { pixelArt, savedTheme, setTheme, THEMES, type TermTheme } from './pixels';
 
 /**
  * Terminals: a window per agent that looks and works like Claude Code in a
@@ -22,7 +23,8 @@ import { acceptPictures } from './paste';
 const BUSY: AgentActivity[] = ['thinking', 'reading', 'writing', 'running'];
 const VERB: Partial<Record<AgentActivity, string>> = { thinking: 'Thinking', reading: 'Reading', writing: 'Writing', running: 'Running' };
 const SPIN = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢'];
-const COLORS = ['#d97757', '#6cb6ff', '#7ee787', '#f0c674', '#d2a8ff', '#ff7b9c', '#56d4dd', '#ffa657'];
+/** Names in a team terminal. */
+const COLORS = ['#d77757', '#b1b9f9', '#4eba65', '#e5b800', '#ff8fb1', '#56d4dd', '#ffa657', '#c3a6ff'];
 /** Lines of a tool result shown before "… +N lines". */
 const OUT_LINES = 3;
 /** Lines kept on screen; older ones scroll away. */
@@ -253,7 +255,8 @@ class Term {
   /** Bring everything up to date; closes itself if the person was let go or the team disbanded. */
   update() {
     const ids = this.members();
-    if (!ids.length) return this.close();
+    // in the terminal view the view decides when it goes; its people may just not be known yet
+    if (!ids.length) return this.dock ? undefined : this.close();
     if (this.teamId) this.members().forEach((id) => this.colorOf(id));
     this.renderBanner(ids);
     this.renderLog(ids);
@@ -268,7 +271,8 @@ class Term {
     const t = this.team();
     const where = lead.status.project ? `${settings.projectsRoot.replace(/[\\/]$/, '')}/${lead.status.project}${lead.status.branch ? ` (${lead.status.branch})` : ''}` : settings.projectsRoot;
     const engine = engineIn(settings, lead.status.engine).name;
-    const key = [t?.name, ...views.map((v) => `${v.name}|${v.model}|${v.role}|${v.team}`), where, engine].join('/');
+    const theme = savedTheme();
+    const key = [t?.name, ...views.map((v) => `${v.name}|${v.model}|${v.role}|${v.team}`), where, engine, theme].join('/');
     if (key === this.bannerKey) return;
     this.bannerKey = key;
     this.tabLabel.textContent = t ? `${t.name} — team` : `${lead.name} — ${engine}`;
@@ -293,7 +297,10 @@ class Term {
       line2.textContent = `${modelLabel(settings, lead.status.engine, lead.model)} · ${lead.team ? `${lead.role === 'manager' ? 'Manager' : 'Worker'}, ${lead.team}` : 'Works on their own'}`;
     }
     info.append(line1, line2, el('div', 'dim', where));
-    this.banner.replaceChildren(faces, info);
+    const art = el('div', 'term-art');
+    art.title = `${theme[0].toUpperCase()}${theme.slice(1)} theme (/theme to change)`;
+    art.append(pixelArt(theme));
+    this.banner.replaceChildren(faces, info, art);
   }
 
   private renderLog(ids: string[]) {
@@ -741,6 +748,8 @@ class Term {
         target = found[0];
       }
       text = at[2].trim();
+      // @name /model ...: a command for that one person
+      if (target && text.startsWith('/')) return this.command(text, [target]);
     }
     const pictures = this.pics.take();
     if (!text && !pictures.length) return;
@@ -753,22 +762,53 @@ class Term {
     else bus.emit('team:say', { id: this.teamId, text, pictures });
   }
 
-  private command(raw: string) {
+  /** Lines with a name in front, one per person: what a command says about each of them. */
+  private printEach(rows: [string, string][]) {
+    for (const [id, text] of rows) {
+      const row = el('div', 't-row t-each');
+      const tag = el('span', 't-who', viewOf(id)?.name ?? id);
+      tag.style.color = this.colorOf(id);
+      row.append(tag, el('div', 't-note local', text));
+      this.log.append(row);
+    }
+    this.lastWho = '';
+    this.screen.scrollTop = this.screen.scrollHeight;
+  }
+
+  /** One line per person: in a team each member by name; for one person, just the line. */
+  private report(ids: string[], line: (v: AgentView) => string) {
+    const views = ids.map((id) => viewOf(id)).filter((v): v is AgentView => !!v);
+    if (this.teamId) return this.printEach(views.map((v) => [v.id, line(v)]));
+    views.forEach((v) => this.print(line(v)));
+  }
+
+  /** `only`: the people it's for (@name in a team); otherwise everyone in this terminal. */
+  private command(raw: string, only?: string[]) {
     const [cmd, ...rest] = raw.slice(1).split(/\s+/);
     const arg = rest.join(' ').trim();
-    const ids = this.members();
+    const ids = only ?? this.members();
+    const whole = !!this.teamId && !only;
+    const lead = viewOf(ids[0])!;
+    const money = (n: number) => `$${n.toFixed(2)}`;
+    const pitchMins = settings.pitchAfterMin ?? 5;
     switch (cmd.toLowerCase()) {
       case 'help':
       case '?':
-        return [
+        [
           'Enter sends · Shift+Enter new line · Esc interrupts · ↑ previous message · Ctrl+V pastes a picture',
-          ...(this.teamId ? ['A message goes to the whole team and the manager decides what happens; @Name message talks to one person'] : []),
-          '/clear clears this screen (they still remember everything)',
-          '/stop interrupts what they are doing',
-          '/hold puts them on hold · /reopen brings them back',
-          `/ideas on|off: whether ${this.teamId ? 'the manager pitches' : 'they pitch'} an idea after ${settings.pitchAfterMin ?? 5} min with nothing to do`,
-          'A pitch shows here: 1 approves, 2 passes, or type what to do instead',
-          '/model shows the models · /model <name> switches',
+          ...(this.teamId ? ['A message goes to the whole team and the manager decides. @Name message talks to one person; @Name /command runs a command for them only.'] : []),
+          `/model [name]    show or switch the model${this.teamId ? ' (each person listed)' : ''}`,
+          '/status          what they are doing, where, on which model',
+          '/cost            tokens and money used',
+          '/skills          their go-to skills',
+          '/engine [name]   show or switch the engine',
+          '/stop            interrupt what they are doing',
+          '/hold, /reopen   put on hold, bring back',
+          `/ideas on|off    ${this.teamId ? 'the manager pitches' : 'they pitch'} an idea after ${pitchMins} min with nothing to do`,
+          '/approve, /pass  answer a pitch waiting here',
+          '/theme [normal|night|light]  change how every terminal looks',
+          '/clear           clear this screen (they still remember everything)',
+          'Anything else starting with / goes to Claude Code itself, e.g. /compact or a skill',
         ].forEach((l) => this.print(l));
         return;
       case 'clear':
@@ -780,36 +820,84 @@ class Term {
       case 'stop':
       case 'interrupt':
         ids.forEach((id) => bus.emit('agent:stop', id));
-        return this.print('Told them to stop');
+        return this.report(ids, () => 'told to stop');
       case 'hold':
       case 'reopen': {
         const on = cmd.toLowerCase() === 'hold';
-        if (this.teamId) bus.emit('team:hold', { id: this.teamId, on });
-        else bus.emit('agent:hold', { id: ids[0], on });
-        return this.print(on ? 'On hold. /reopen to bring them back.' : 'Reopened');
+        if (whole) bus.emit('team:hold', { id: this.teamId, on });
+        else ids.forEach((id) => bus.emit('agent:hold', { id, on }));
+        return this.report(ids, () => (on ? 'on hold (/reopen brings them back)' : 'reopened'));
       }
       case 'ideas': {
         // in a team it's the manager who pitches
-        const lead = viewOf(ids[0])!;
         const on = /^(on|yes|1)$/i.test(arg) ? true : /^(off|no|0)$/i.test(arg) ? false : !lead.status.ideas;
         bus.emit('agent:ideas', { id: lead.id, on });
-        return this.print(on ? `${lead.name} will come up with ideas when free` : `${lead.name} stays idle until told what to do`);
+        return this.report([lead.id], () => (on ? `pitches an idea after ${pitchMins} min with nothing to do` : 'stays idle until told what to do'));
       }
       case 'model': {
-        const lead = viewOf(ids[0])!;
-        const models = engineIn(settings, lead.status.engine).models;
         if (!arg) {
-          this.print(`Now: ${modelLabel(settings, lead.status.engine, lead.model)}`);
-          return this.print(`Pick one: ${models.map((m) => m.label).join(', ')}`);
+          this.report(ids, (v) => `model: ${modelLabel(settings, v.status.engine, v.model)}`);
+          const engines = [...new Set(ids.map((id) => viewOf(id)!.status.engine))];
+          engines.forEach((e) => this.print(`${engines.length > 1 ? `${engineIn(settings, e).name}: ` : ''}pick one: ${engineIn(settings, e).models.map((m) => m.label).join(', ')}`));
+          return;
         }
         const q = arg.toLowerCase();
-        const m = models.find((x) => x.id.toLowerCase() === q || x.label.toLowerCase() === q) ?? models.find((x) => x.label.toLowerCase().includes(q) || (x.id && x.id.toLowerCase().includes(q)));
-        if (!m) return this.print(`No model matches "${arg}". Pick one: ${models.map((x) => x.label).join(', ')}`);
-        ids.forEach((id) => bus.emit('agent:model', { id, model: m.id }));
-        return this.print(`Model set to ${m.label}`);
+        return this.report(ids, (v) => {
+          const models = engineIn(settings, v.status.engine).models;
+          const m = models.find((x) => x.id.toLowerCase() === q || x.label.toLowerCase() === q) ?? models.find((x) => x.label.toLowerCase().includes(q) || (x.id && x.id.toLowerCase().includes(q)));
+          if (!m) return `no model matches "${arg}" on ${engineIn(settings, v.status.engine).name}`;
+          bus.emit('agent:model', { id: v.id, model: m.id });
+          return `model set to ${m.label}`;
+        });
       }
+      case 'engine': {
+        if (!arg) {
+          this.report(ids, (v) => `engine: ${engineIn(settings, v.status.engine).name}`);
+          return this.print(`Pick one: ${settings.engines.map((e) => e.name).join(', ')}`);
+        }
+        const q = arg.toLowerCase();
+        const e = settings.engines.find((x) => x.name.toLowerCase() === q) ?? settings.engines.find((x) => x.name.toLowerCase().includes(q));
+        if (!e) return this.print(`No engine called "${arg}". Pick one: ${settings.engines.map((x) => x.name).join(', ')}`);
+        ids.forEach((id) => bus.emit('agent:engine', { id, engine: e.id }));
+        return this.report(ids, () => `engine set to ${e.name} (from the next task)`);
+      }
+      case 'status':
+        return this.report(ids, (v) => {
+          const where = v.status.project ? ` · ${v.status.project}${v.status.branch ? ` (${v.status.branch})` : ''}` : '';
+          const role = v.team ? ` · ${v.role === 'manager' ? 'manager' : 'worker'} in ${v.team}` : '';
+          const doing = v.status.phase === 'idle' ? 'Idle' : LABEL[v.activity];
+          const detail = v.detail && v.activity !== 'done' ? `: ${v.detail}` : '';
+          return `${doing}${detail}${where} · ${modelLabel(settings, v.status.engine, v.model)}${role}${v.status.ideas ? ' · ideas on' : ''}`;
+        });
+      case 'cost':
+      case 'usage': {
+        const views = ids.map((id) => viewOf(id)!);
+        if (!views.some((v) => v.usage)) return this.print('Simulated agents use nothing.');
+        this.report(ids, (v) => (v.usage ? `${shortTokens(v.usage.tokens)} tokens · ${money(v.usage.cost)}` : '-'));
+        if (views.length > 1) {
+          const total = views.reduce((a, v) => ({ t: a.t + (v.usage?.tokens ?? 0), c: a.c + (v.usage?.cost ?? 0) }), { t: 0, c: 0 });
+          this.print(`Total: ${shortTokens(total.t)} tokens · ${money(total.c)}`);
+        }
+        return;
+      }
+      case 'skills':
+        return this.report(ids, (v) => (v.skills.length ? `go-to skills: ${v.skills.join(', ')}` : 'no go-to skills (every installed skill is still there for them)'));
+      case 'theme': {
+        const q = arg.toLowerCase();
+        const next = (THEMES.find((t) => t.startsWith(q) && q) ?? (q === 'dark' ? 'night' : q === 'day' ? 'light' : null)) as TermTheme | null;
+        if (q && !next) return this.print(`No theme called "${arg}". Pick one: ${THEMES.join(', ')}`);
+        const theme = next ?? THEMES[(THEMES.indexOf(savedTheme()) + 1) % THEMES.length];
+        bus.emit('theme', theme);
+        return this.print(`Theme: ${theme}`);
+      }
+      case 'approve':
+      case 'pass':
+        if (!this.pitchUp(ids)) return this.print('No pitch waiting here.');
+        return this.decide(cmd.toLowerCase() === 'approve');
       default:
-        return this.print(`Unknown command /${cmd}. Type /help.`);
+        // Claude Code's own commands and skills: straight through to the session
+        ids.forEach((id) => bus.emit('agent:say', { id, text: raw }));
+        return this.report(ids, () => `sent ${raw.split(/\s/)[0]} to Claude Code`);
     }
   }
 }
@@ -836,7 +924,15 @@ function openTerm(key: string, agentId: string | null, teamId: string | null) {
   terms.set(key, new Term(key, agentId, teamId));
 }
 
+/** Every terminal, and the terminal view, in one look. */
+export function applyTheme(theme: TermTheme) {
+  setTheme(theme);
+  terms.forEach((t) => t.update());
+}
+
 export function initTerminals() {
+  setTheme(savedTheme());
+  bus.on('theme', (t: TermTheme) => applyTheme(t));
   try {
     places = JSON.parse(localStorage.getItem(KEY) ?? '{}') ?? {};
   } catch {

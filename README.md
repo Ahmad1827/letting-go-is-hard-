@@ -132,14 +132,23 @@ what happens; start with `@Name` for one person. Teammates talk to each other to
 dragged, resized and minimized, and the history is kept between runs.
 
 **Terminal view** (the `>_` icon in the top bar, or **T**): the office as nothing but
-terminals, laid out like tmux. Group terminals across the top, everyone's own below. Click
-one to zoom in and work in it; Esc (with an empty prompt), `[esc] all` or Ctrl + scroll down
-zooms back out, Ctrl + scroll up over a terminal zooms into it. The numbered tabs along the
-top jump straight to any terminal (Alt + its number) and flag the ones waiting on you, a
+terminals, all in one grid, groups and people alike. Drag one to move it (the order is kept);
+click one to zoom in and work in it. Esc (with an empty prompt), `[esc] all` or Ctrl + scroll
+down zooms back out, Ctrl + scroll up over a terminal zooms into it. The numbered tabs along
+the top jump straight to any terminal (Alt + its number) and flag the ones waiting on you, a
 pitch included; the line along the bottom counts who's busy and what's waiting. `[+] new
-group` puts agents together. The panels
-step aside while it's on (their icons still open them) and come back when you switch to the
-office. The app remembers which view you were in.
+group` puts agents together.
+
+**Themes:** every terminal looks like Claude Code, in one of four themes: *normal* (Claude
+Code's dark theme), *purple* (Windows Terminal's Ubuntu colours), *night* and *light*. Each
+has its own pixel picture in the welcome box: a sun behind a cloud, a sunset, the moon, the
+sun. Switch with the theme button in the terminal view or `/theme` in any terminal.
+
+**Commands** in any terminal: `/model`, `/status`, `/cost`, `/skills`, `/engine`, `/stop`,
+`/hold`, `/reopen`, `/ideas`, `/approve`, `/pass`, `/theme`, `/clear`, `/help`. In a group
+terminal each person answers on their own line, and `@Name /model ...` runs it for one
+person. Anything else starting with `/` goes to Claude Code itself (e.g. `/compact`, or a
+skill).
 
 **Skills:** every agent can use every skill installed on your machine, and picks what fits
 the task. The Skills button on an agent marks their go-to skills, which they reach for first

@@ -431,15 +431,103 @@ body.leaving #zoombar { transform: translateY(160%); opacity: 0; }
 
 /* ------------------------------------------------------------------ terminals */
 
+/*
+ * Terminal themes (/theme, or the button in the terminal view). Normal is
+ * Claude Code's dark theme; night is deep blue under the moon; light is
+ * Claude Code's light theme in the sun.
+ */
+body {
+  --t-bg: #141413;
+  --t-ink: #e3e1dc;
+  --t-hi: #ffffff;
+  --t-dim: #8a8780;
+  --t-rule: #4a4844;
+  --t-accent: #d77757;
+  --t-ok: #4eba65;
+  --t-warn: #e5b800;
+  --t-pick: #b1b9f9;
+  --t-err: #ff6b80;
+  --t-bar: #0c0c0b;
+  --t-border: #333230;
+  --t-front: #55524d;
+  --t-hover: #1f1e1c;
+  --t-user: #2a2927;
+  --t-from: #22262d;
+  --t-code: #0c0c0b;
+  --t-ph: #66635e;
+  --t-deck: #0a0a09;
+  --t-line: #2e2d2b;
+}
+/* Windows Terminal's Ubuntu colours: aubergine, with Claude Code inside */
+body[data-term-theme='purple'] {
+  --t-bg: #300a24;
+  --t-ink: #eeeeec;
+  --t-hi: #ffffff;
+  --t-dim: #b3a7b0;
+  --t-rule: #8c7a88;
+  --t-accent: #ff8f5e;
+  --t-ok: #8ae234;
+  --t-warn: #fce94f;
+  --t-pick: #8cb4ff;
+  --t-err: #ef2929;
+  --t-bar: #202020;
+  --t-border: #3c3c3c;
+  --t-front: #6a6a6a;
+  --t-hover: #45193a;
+  --t-user: #4b2141;
+  --t-from: #3a2350;
+  --t-code: #24071b;
+  --t-ph: #8a7084;
+  --t-deck: #1a0614;
+  --t-line: #4a2a42;
+}
+body[data-term-theme='night'] {
+  --t-bg: #0b1122;
+  --t-ink: #cdd6f0;
+  --t-hi: #ffffff;
+  --t-dim: #6f7a99;
+  --t-rule: #34406a;
+  --t-accent: #9fb4ff;
+  --t-ok: #6fd3a8;
+  --t-warn: #ffd479;
+  --t-pick: #ffd479;
+  --t-err: #ff8fa3;
+  --t-bar: #060a16;
+  --t-border: #1d2747;
+  --t-front: #3a4a80;
+  --t-hover: #141c36;
+  --t-user: #172040;
+  --t-from: #1f1a33;
+  --t-code: #060a16;
+  --t-ph: #46507a;
+  --t-deck: radial-gradient(ellipse at 70% -10%, #1a2550, #050813 70%);
+  --t-line: #1d2747;
+}
+body[data-term-theme='light'] {
+  --t-bg: #faf9f5;
+  --t-ink: #1f1e1d;
+  --t-hi: #000000;
+  --t-dim: #6b6a65;
+  --t-rule: #c9c6bd;
+  --t-accent: #c15f3c;
+  --t-ok: #2e8b48;
+  --t-warn: #a06b00;
+  --t-pick: #4a5bd4;
+  --t-err: #c4314b;
+  --t-bar: #e8e6dc;
+  --t-border: #d6d3c9;
+  --t-front: #b0ab9e;
+  --t-hover: #e0ddd2;
+  --t-user: #ece9e1;
+  --t-from: #e4e8f4;
+  --t-code: #f0eee6;
+  --t-ph: #a19e95;
+  --t-deck: #eeece4;
+  --t-line: #d6d3c9;
+}
+
 /* a window per agent (or team) that looks like Claude Code in a terminal */
 .term-win {
-  --t-bg: #300a24;
-  --t-ink: #e8e3e6;
-  --t-dim: #9d8f99;
-  --t-rule: #7d6a78;
-  --t-accent: #d97757;
-  --t-ok: #4ec97c;
-  --t-warn: #e5b800;
   position: absolute;
   pointer-events: auto;
   display: flex;
@@ -448,7 +536,7 @@ body.leaving #zoombar { transform: translateY(160%); opacity: 0; }
   min-height: 220px;
   max-width: calc(100vw - 8px);
   background: var(--t-bg);
-  border: 1px solid #4a4a4a;
+  border: 1px solid var(--t-border);
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
   resize: both;
   overflow: hidden;
@@ -456,7 +544,7 @@ body.leaving #zoombar { transform: translateY(160%); opacity: 0; }
   font: 13px/1.45 'Cascadia Mono', 'Cascadia Code', Consolas, 'DejaVu Sans Mono', 'Courier New', monospace;
   animation: term-open 0.22s cubic-bezier(0.2, 1.2, 0.4, 1) both;
 }
-.term-win.front { border-color: #6a6a6a; }
+.term-win.front { border-color: var(--t-front); }
 .term-win.closing { animation: term-close 0.18s ease-in both; pointer-events: none; }
 .term-win.dragging { opacity: 0.94; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65); }
 .term-win.min { height: auto !important; min-height: 0; resize: none; }
@@ -470,7 +558,7 @@ body.leaving #zoombar { transform: translateY(160%); opacity: 0; }
   justify-content: space-between;
   height: 34px;
   padding: 0 4px 0 8px;
-  background: #1f1f1f;
+  background: var(--t-bar);
   cursor: grab;
   user-select: none;
   touch-action: none;
@@ -486,21 +574,31 @@ body.leaving #zoombar { transform: translateY(160%); opacity: 0; }
   padding: 0 14px 0 10px;
   background: var(--t-bg);
   border-radius: 6px 6px 0 0;
+  color: var(--t-ink);
   font: 12px 'Segoe UI', Tahoma, sans-serif;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.term-star { color: #fff; background: #2fb344; width: 15px; height: 15px; display: grid; place-items: center; font-size: 11px; border-radius: 3px; flex: none; }
+.term-star { color: #fff; background: var(--t-accent); width: 15px; height: 15px; display: grid; place-items: center; font-size: 11px; border-radius: 3px; flex: none; }
 .term-bar .ctrls { align-self: center; }
-.term-bar .x { color: #bbb; }
+.term-bar .x { color: var(--t-dim); }
 
 .term-body { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 0 14px 6px; }
-.term-screen { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 0 6px; scrollbar-width: thin; scrollbar-color: #5a3a52 transparent; }
+.term-screen { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 0 6px; scrollbar-width: thin; scrollbar-color: var(--t-rule) transparent; }
 
-.term-banner { display: flex; gap: 14px; align-items: center; margin-bottom: 14px; }
+/* the theme's pixel picture, at the right of the welcome box */
+.term-art { margin-left: auto; flex: none; display: flex; }
+.pixel-art { image-rendering: pixelated; }
+.pixel-art .star { animation: twinkle 2.4s steps(2, jump-none) infinite; }
+@keyframes twinkle { 50% { opacity: 0.2; } }
+.tile:not(.big) .pixel-art { width: 34px; height: 34px; }
+
+/* the welcome box at the top, Claude Code style */
+.term-banner { display: flex; gap: 14px; align-items: center; min-width: 0; margin-bottom: 14px; padding: 8px 12px; border: 1px solid var(--t-accent); border-radius: 8px; }
+.term-info > div:first-child::before { content: '✻ '; color: var(--t-accent); }
 .term-faces { display: flex; flex: none; }
-.term-faces img { width: 52px; height: 52px; image-rendering: pixelated; border: 2px solid transparent; border-radius: 4px; background: rgba(255, 255, 255, 0.04); }
+.term-faces img { width: 52px; height: 52px; image-rendering: pixelated; border: 2px solid transparent; border-radius: 4px; background: var(--t-hover); }
 .term-faces img + img { margin-left: -16px; }
 .term-info { min-width: 0; }
 .term-info > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -508,9 +606,9 @@ body.leaving #zoombar { transform: translateY(160%); opacity: 0; }
 
 .term-log > div { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .term-log .t-out, .term-log .t-row > .t-out { margin-top: -6px; }
-.t-user { background: rgba(255, 255, 255, 0.07); padding: 2px 8px; color: #f4f0f2; }
-.t-user.from { background: rgba(108, 182, 255, 0.08); }
-.t-from { font-weight: bold; color: #6cb6ff; margin-right: 8px; }
+.t-user { background: var(--t-user); padding: 2px 8px; color: var(--t-ink); }
+.t-user.from { background: var(--t-from); }
+.t-from { font-weight: bold; color: var(--t-pick); margin-right: 8px; }
 .t-to { color: var(--t-dim); margin-left: 10px; font-size: 11.5px; }
 .term-caret { color: var(--t-dim); }
 .t-msg, .t-tool { display: grid; grid-template-columns: 18px minmax(0, 1fr); }
@@ -518,13 +616,14 @@ body.leaving #zoombar { transform: translateY(160%); opacity: 0; }
 .t-dot.ok { color: var(--t-ok); }
 .t-tool b { font-weight: bold; }
 .t-md > div + div, .t-md > pre { margin-top: 6px; }
-.t-md code { color: #c3a6ff; }
-.t-code { margin: 6px 0 0; padding: 6px 8px; background: rgba(0, 0, 0, 0.3); white-space: pre-wrap; font: inherit; }
+.t-md code { color: var(--t-pick); }
+.t-md b { color: var(--t-hi); }
+.t-code { margin: 6px 0 0; padding: 6px 8px; background: var(--t-code); white-space: pre-wrap; font: inherit; }
 .t-out { display: grid; grid-template-columns: 18px minmax(0, 1fr); padding-left: 18px; color: var(--t-dim); }
 .t-out pre { margin: 0; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
 .t-out pre.more { cursor: pointer; }
 .t-out pre.more:hover { color: var(--t-ink); }
-.t-out.error { color: #ff8080; }
+.t-out.error { color: var(--t-err); }
 .t-note { color: var(--t-dim); font-style: italic; }
 .t-note.local { font-style: normal; }
 .t-row { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 8px; }
@@ -540,7 +639,7 @@ body.leaving #zoombar { transform: translateY(160%); opacity: 0; }
 .term-ask b { color: var(--t-accent); }
 .t-ask-what { margin: 6px 0 8px 2ch; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
 .t-opt { cursor: pointer; white-space: pre; color: var(--t-dim); }
-.t-opt.on, .t-opt:hover { color: #6cb6ff; }
+.t-opt.on, .t-opt:hover { color: var(--t-pick); }
 
 .term-win .pictures { padding: 4px 0; }
 .term-prompt {
@@ -562,11 +661,11 @@ body.leaving #zoombar { transform: translateY(160%); opacity: 0; }
   background: transparent;
   color: var(--t-ink);
   font: inherit;
-  caret-color: #b8f5c4;
+  caret-color: var(--t-ink);
   overflow-y: auto;
 }
 .term-prompt textarea:focus { border: none; }
-.term-prompt textarea::placeholder { color: #6e5f6a; }
+.term-prompt textarea::placeholder { color: var(--t-ph); }
 .term-foot { display: flex; justify-content: space-between; gap: 10px; padding: 4px 2px 0; font-size: 12px; white-space: nowrap; overflow: hidden; flex: none; }
 .term-foot .auto { color: var(--t-warn); }
 .term-foot span:last-child { overflow: hidden; text-overflow: ellipsis; }
@@ -577,25 +676,24 @@ body.leaving #zoombar { transform: translateY(160%); opacity: 0; }
 
 /* questions an agent asks, Claude Code style */
 .t-q-head { margin-bottom: 4px; }
-.t-q-chip { display: inline-block; padding: 0 6px; background: var(--t-accent); color: #1b0b14; font-weight: bold; border-radius: 3px; }
+.t-q-chip { display: inline-block; padding: 0 6px; background: var(--t-accent); color: #fff; font-weight: bold; border-radius: 3px; }
 .term-ask .t-opt .dim { white-space: normal; }
-.term-foot .full { color: #ff6b6b; }
+.term-foot .full { color: var(--t-err); }
 
 /* ------------------------------------------------------------------ terminal view */
 
 /*
- * The office as nothing but terminals, laid out like tmux: a status line of
- * numbered windows on top, panes with thin borders and their name in the top
- * edge, a status line at the bottom. Groups on top, everyone below.
+ * The office as nothing but terminals: numbered tabs on top, a Claude Code
+ * window per group and per person (drag them to rearrange), a status line at
+ * the bottom.
  */
 #deck {
-  --d-bg: #0b0d0c;
-  --d-pane: #0e1110;
-  --d-line: #2b302d;
-  --d-ink: #c9d1c9;
-  --d-dim: #69736b;
-  --d-green: #3ddc84;
-  --d-amber: #ffb000;
+  --d-bg: var(--t-deck);
+  --d-line: var(--t-line);
+  --d-ink: var(--t-ink);
+  --d-dim: var(--t-dim);
+  --d-green: var(--t-accent);
+  --d-amber: var(--t-warn);
   --d-mono: 'Cascadia Mono', 'Cascadia Code', 'JetBrains Mono', Consolas, 'DejaVu Sans Mono', 'Courier New', monospace;
   position: fixed;
   inset: 0;
@@ -607,35 +705,27 @@ body.leaving #zoombar { transform: translateY(160%); opacity: 0; }
   font: 12.5px/1.4 var(--d-mono);
 }
 #deck[hidden] { display: none; }
-/* faint scanlines, as on an old monitor */
-#deck::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: repeating-linear-gradient(to bottom, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 3px);
-}
 body.deck-on #zoombar, body.deck-on #windows .term-win { display: none; }
 
 /* the icon bar folds into the top line, flat */
-body.deck-on #dock { top: 0; left: 0; height: 26px; padding: 0 2px; gap: 0; background: #141816; border: none; border-right: 1px solid #2b302d; border-bottom: 1px solid #2b302d; box-shadow: none; }
-body.deck-on #dock button { width: 30px; height: 25px; border: none; box-shadow: none; background: none; color: #69736b; }
-body.deck-on #dock button:hover { background: #1d2320; color: #c9d1c9; }
-body.deck-on #dock .tab.on { color: #3ddc84; }
-body.deck-on #dock .tab::after { bottom: 0; height: 2px; background: #3ddc84; box-shadow: none; }
+body.deck-on #dock { top: 0; left: 0; height: 28px; padding: 0 2px; gap: 0; background: var(--t-bar); border: none; border-right: 1px solid var(--t-line); border-bottom: 1px solid var(--t-line); box-shadow: none; }
+body.deck-on #dock button { width: 30px; height: 27px; border: none; box-shadow: none; background: none; color: var(--t-dim); }
+body.deck-on #dock button:hover { background: var(--t-hover); color: var(--t-ink); }
+body.deck-on #dock .tab.on { color: var(--t-accent); }
+body.deck-on #dock .tab::after { bottom: 0; height: 2px; background: var(--t-accent); box-shadow: none; }
 body.deck-on #dock svg { transform: scale(0.8); }
-body.deck-on #dock .dock-sep { height: 14px; width: 1px; background: #2b302d; }
+body.deck-on #dock .dock-sep { height: 14px; width: 1px; background: var(--t-line); }
 body.deck-on #clock { display: none; }
 
-/* top status line: numbered windows */
+/* top line: numbered tabs */
 #deck-bar {
   display: flex;
   align-items: stretch;
   min-width: 0;
   flex: none;
-  height: 26px;
+  height: 28px;
   padding-left: calc(var(--dock-w, 0px) + 8px);
-  background: #141816;
+  background: var(--t-bar);
   border-bottom: 1px solid var(--d-line);
 }
 #deck-tabs { display: flex; align-items: stretch; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
@@ -655,88 +745,63 @@ body.deck-on #clock { display: none; }
   font: inherit;
   white-space: nowrap;
 }
-.deck-tab:hover:not(:disabled), .deck-tools button:hover { background: #1d2320; color: var(--d-ink); }
-.deck-tab .num { color: var(--d-dim); }
+.deck-tab:hover:not(:disabled), .deck-tools button:hover { background: var(--t-hover); color: var(--d-ink); }
+.deck-tab .num { opacity: 0.7; }
 .deck-tab.team > span:not(.num):not(.dot):not(.mark) { font-weight: bold; }
-.deck-tab.on { background: var(--d-green); color: #06130b; }
-.deck-tab.on .num { color: #06130b; opacity: 0.6; }
+.deck-tab.on { background: var(--t-bg); color: var(--d-ink); box-shadow: inset 0 -2px 0 var(--d-green); }
 .deck-tab .mark { margin-left: -3px; }
-.deck-tab .dot { width: 7px; height: 7px; border-radius: 0; flex: none; }
-.deck-tab .flag { color: #06130b; background: var(--d-amber); padding: 0 4px; animation: deck-blink 1.2s steps(2, jump-none) infinite; }
-.deck-sep { width: 1px; background: var(--d-line); flex: none; margin: 5px 4px; }
+.deck-tab .dot { width: 7px; height: 7px; flex: none; }
+.deck-tab .flag { color: var(--t-bg); background: var(--d-amber); padding: 0 4px; animation: deck-blink 1.2s steps(2, jump-none) infinite; }
+.deck-sep { width: 1px; background: var(--d-line); flex: none; margin: 6px 4px; }
 .deck-tools { display: flex; flex: none; border-left: 1px solid var(--d-line); }
 .deck-tools button[hidden] { display: none; }
 .deck-tools button { color: var(--d-ink); }
 #deck-group { color: var(--d-green); }
 @keyframes deck-blink { 50% { opacity: 0.35; } }
 
-/* the panes */
-#deck-grid { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 6px; scrollbar-width: thin; scrollbar-color: var(--d-line) transparent; }
-#deck-empty { margin: 32px 24px; color: var(--d-dim); }
-#deck-empty::after { content: '█'; color: var(--d-green); animation: deck-blink 1s steps(2, jump-none) infinite; margin-left: 2px; }
-.deck-row { display: grid; gap: 6px; flex: none; }
-.deck-row:empty { display: none; }
-.deck-row.groups { grid-template-columns: repeat(auto-fit, minmax(min(460px, 100%), 1fr)); grid-auto-rows: max(300px, 40vh); }
-.deck-row.people { grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); grid-auto-rows: 280px; }
-
-.tile { position: relative; min-width: 0; min-height: 0; cursor: zoom-in; outline: 1px solid var(--d-line); transition: outline-color 0.12s; }
-.tile:not(.big):hover { outline-color: var(--d-green); }
-.tile.need { outline: 1px solid var(--d-amber); }
-.tile.big { cursor: default; outline-color: var(--d-green); }
-
-/* a terminal inside a pane: plain black, monospace through and through */
-#deck .term-win.docked {
-  --t-bg: var(--d-pane);
-  --t-ink: var(--d-ink);
-  --t-dim: var(--d-dim);
-  --t-rule: var(--d-line);
-  position: relative;
-  inset: auto;
-  width: 100%;
-  height: 100%;
-  min-width: 0;
+/* the terminals */
+#deck-grid {
+  flex: 1;
   min-height: 0;
-  max-width: none;
-  resize: none;
-  border: none;
-  box-shadow: none;
-  animation: none;
-  font: inherit;
-  text-shadow: 0 0 6px rgba(61, 220, 132, 0.08);
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr));
+  grid-auto-rows: 300px;
+  align-content: start;
+  gap: 12px;
+  padding: 12px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--d-line) transparent;
 }
-#deck .term-bar { height: 20px; padding: 0 8px; align-items: center; background: none; border-bottom: 1px dashed var(--d-line); cursor: inherit; }
-#deck .term-tab { height: auto; padding: 0; background: none; border-radius: 0; font: inherit; color: var(--d-dim); gap: 6px; max-width: 100%; }
-#deck .term-tab::before { content: '──'; color: var(--d-line); }
-#deck .term-star { width: auto; height: auto; background: none; color: var(--t-accent); font-size: inherit; border-radius: 0; }
-#deck .tile.big .term-tab, #deck .tile:hover .term-tab { color: var(--d-green); }
-#deck .term-body { padding: 0 10px 4px; }
-#deck .term-screen { padding-top: 8px; scrollbar-color: var(--d-line) transparent; }
+#deck-empty { grid-column: 1 / -1; margin: 32px 24px; color: var(--d-dim); }
+#deck-empty::after { content: '█'; color: var(--d-green); animation: deck-blink 1s steps(2, jump-none) infinite; margin-left: 2px; }
 
-/* the banner as Claude Code's welcome box rather than pictures */
-#deck .term-banner { display: block; margin-bottom: 10px; padding: 4px 10px; border: 1px solid var(--t-accent); border-radius: 0; }
-#deck .term-faces { display: none; }
-#deck .term-info > div:first-child::before { content: '✻ '; color: var(--t-accent); }
+.tile { position: relative; min-width: 0; min-height: 0; cursor: zoom-in; transition: transform 0.16s cubic-bezier(0.2, 0.9, 0.3, 1), box-shadow 0.16s, opacity 0.16s; }
+.tile:not(.big):hover { box-shadow: 0 0 0 1px var(--d-green); }
+.tile.need { box-shadow: 0 0 0 1px var(--d-amber); }
+.tile.big { cursor: default; }
+.tile:not(.big) { user-select: none; }
+/* dragging one to a new place */
+.tile.lifted { opacity: 0.85; transform: scale(1.02); z-index: 5; box-shadow: 0 0 0 1px var(--d-green), 0 18px 40px rgba(0, 0, 0, 0.6); cursor: grabbing; transition: none; }
+.tile.drop-before::before, .tile.drop-after::after { content: ''; position: absolute; top: 0; bottom: 0; width: 3px; background: var(--d-green); z-index: 6; }
+.tile.drop-before::before { left: -8px; }
+.tile.drop-after::after { right: -8px; }
+body.dragging-tile, body.dragging-tile * { cursor: grabbing !important; user-select: none; }
+.tile.lifted, .tile.lifted * { pointer-events: none !important; }
 
-#deck .t-user { background: #17201b; border-left: 2px solid var(--d-green); }
-#deck .t-user.from { background: #141b22; border-left-color: #6cb6ff; }
-#deck .t-code { background: #050605; border: 1px solid var(--d-line); }
-#deck .term-ask { border-radius: 0; border-style: dashed; }
-#deck .t-q-chip { border-radius: 0; }
-#deck .t-opt.on, #deck .t-opt:hover { color: var(--d-green); }
-#deck .term-prompt { border-top: 1px solid var(--d-line); border-bottom: none; }
-#deck .term-prompt textarea { caret-color: var(--d-green); }
-#deck .term-prompt textarea::placeholder { color: #3f4741; }
-#deck .term-foot { font-size: 11.5px; }
-
-#deck .tile:not(.big) .term-win { pointer-events: none; font-size: 11.5px; }
-#deck .tile:not(.big) .term-prompt, .tile:not(.big) .term-foot, .tile:not(.big) .pictures { display: none; }
-#deck .tile:not(.big) .term-banner { padding: 2px 8px; margin-bottom: 6px; }
-#deck .tile:not(.big) .term-info > div:nth-child(n + 2) { display: none; }
+.tile .term-win.docked { position: relative; inset: auto; width: 100%; height: 100%; min-width: 0; min-height: 0; max-width: none; resize: none; animation: none; }
+.tile:not(.big) .term-bar { cursor: grab; }
+.tile.big .term-bar { cursor: default; }
+.tile:not(.big) .term-screen, .tile:not(.big) .term-body { pointer-events: none; }
+.tile:not(.big) .term-win { font-size: 11.5px; }
+.tile:not(.big) .term-prompt, .tile:not(.big) .term-foot, .tile:not(.big) .pictures { display: none; }
+.tile:not(.big) .term-faces img { width: 36px; height: 36px; }
+.tile:not(.big) .term-banner { padding: 4px 10px; margin-bottom: 8px; }
 
 /* zoomed in: one terminal fills the view */
 #deck-grid.zoomed { overflow: hidden; }
-#deck-grid.zoomed .deck-row:not(.has-big), #deck-grid.zoomed .tile:not(.big), #deck-grid.zoomed #deck-empty { display: none; }
-#deck-grid.zoomed .deck-row.has-big { flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); grid-auto-rows: 0; }
+#deck-grid.zoomed .tile:not(.big), #deck-grid.zoomed #deck-empty { display: none; }
+#deck-grid.zoomed { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); grid-auto-rows: 0; }
 
 /* bottom status line */
 #deck-status {
@@ -747,13 +812,14 @@ body.deck-on #clock { display: none; }
   height: 22px;
   padding: 0 10px;
   align-items: center;
-  background: var(--d-green);
-  color: #06130b;
+  background: var(--t-bar);
+  border-top: 1px solid var(--d-line);
+  color: var(--d-dim);
   white-space: nowrap;
   overflow: hidden;
 }
 #deck-status span { overflow: hidden; text-overflow: ellipsis; }
-#deck-status-right { opacity: 0.75; }
+#deck-status-left b { color: var(--d-green); font-weight: normal; }
 
 ::view-transition-group(*) { animation-duration: 0.22s; animation-timing-function: cubic-bezier(0.2, 0.9, 0.3, 1); }
 
@@ -765,3 +831,4 @@ body.deck-on #clock { display: none; }
 @media (prefers-reduced-motion: reduce) {
   .deck-tab .flag, #deck-empty::after { animation: none; }
 }
+body[data-term-theme='light'] .t-who, body[data-term-theme='light'] .t-from { filter: brightness(0.72) saturate(1.4); }
