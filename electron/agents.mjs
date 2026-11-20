@@ -10,15 +10,15 @@ import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import { engine, settings } from './settings.mjs';
-import { catalog, skillPrompt, skillSettings } from './skills.mjs';
+import { screenBrief } from './screen.mjs';
+import { catalog, forget, skillPrompt } from './skills.mjs';
 
 /**
- * Agents get every tool Claude Code has, plus the MCP servers set up on this
- * machine (Blender and friends), except the ones that would take over what the
- * office does itself: asking the owner multiple-choice questions and moving
- * between worktrees. The Skill tool comes only with skills picked for them.
+ * Agents get every tool Claude Code has, every installed skill, and the MCP
+ * servers set up on this machine (Blender and friends), except moving between
+ * worktrees, which the office does itself.
  */
-const NOT_HERE = ['AskUserQuestion', 'EnterWorktree', 'ExitWorktree'];
+const NOT_HERE = ['EnterWorktree', 'ExitWorktree'];
 /** Approved work happens in git worktrees here, so a project's own checkout is never touched. */
 const worktrees = () => path.join(settings().projectsRoot, '.letting-go', 'worktrees');
 
@@ -188,27 +188,9 @@ export function setupAgents(ipcMain, getWindow) {
     const entry = { p: null, closed: false, pending: [] };
     procs.set(id, entry);
     send(id, prompt);
-    let skillTool = false;
-    let brief = system;
-    if (skills?.length) {
-      try {
-        const { all } = await catalog(eng.id, launchOf(eng));
-        if (entry.closed) return;
-        const picked = skills.filter((s) => all.includes(s));
-        const gone = skills.filter((s) => !all.includes(s));
-        if (gone.length) emit(id, { kind: 'note', text: `Skills no longer installed: ${gone.join(', ')}` });
-        if (picked.length) {
-          skillTool = true;
-          brief = `${system}\n\n${skillPrompt(picked)}`;
-          args.push('--settings', JSON.stringify(skillSettings(all, picked)));
-        }
-      } catch (e) {
-        if (entry.closed) return;
-        // can't tell which skills to hide, so they get none rather than all of them
-        emit(id, { kind: 'note', text: `Couldn't load their skills, working without them this time: ${e.message}` });
-      }
-    }
-    args.push('--disallowedTools', [...NOT_HERE, ...(skillTool ? [] : ['Skill'])].join(','), '--append-system-prompt', brief);
+    // every skill is theirs; the ones picked for them are named as their go-to ones
+    const brief = [system, skills?.length ? skillPrompt(skills) : '', screenBrief()].filter(Boolean).join('\n\n');
+    args.push('--disallowedTools', NOT_HERE.join(','), '--append-system-prompt', brief);
     const launch = launchOf(eng);
     const p = spawn(launch.file, [...launch.pre, ...args], { cwd: dir, env: launch.env, windowsHide: true });
     entry.p = p;
@@ -333,6 +315,27 @@ export function setupAgents(ipcMain, getWindow) {
     } catch (e) {
       return { skills: [], error: e.message };
     }
+  });
+
+  // the owner said yes to a plugin an agent asked for
+  ipcMain.handle('skills:install', (_e, engineId, plugin) => {
+    const eng = engine(engineId);
+    const launch = launchOf(eng);
+    return new Promise((resolve) => {
+      if (!/^[\w.@/-]+$/.test(plugin)) return resolve({ ok: false, text: `"${plugin}" isn't a plugin name` });
+      const p = spawn(launch.file, [...launch.pre, 'plugin', 'install', plugin, '--scope', 'user'], { cwd: launch.cwd, env: launch.env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      let out = '';
+      const keep = (d) => (out = (out + d).slice(-4000));
+      p.stdout.on('data', keep);
+      p.stderr.on('data', keep);
+      const timer = setTimeout(() => p.kill(), 180_000);
+      p.on('error', (e) => resolve({ ok: false, text: e.message }));
+      p.on('exit', (code) => {
+        clearTimeout(timer);
+        forget(eng.id);
+        resolve({ ok: code === 0, text: out.trim().split('\n').slice(-3).join('\n') || `exit ${code}` });
+      });
+    });
   });
 
   return { stopAll: () => [...procs.keys()].forEach(stop) };

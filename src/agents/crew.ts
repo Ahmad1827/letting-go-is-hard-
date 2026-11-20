@@ -37,6 +37,8 @@ export interface StaffSave {
   held?: Phase | null;
   /** Messages that came in while on hold. */
   inbox?: string[];
+  /** Teammates' messages waiting for their next session. */
+  mail?: string[];
 }
 
 /** A team as remembered, with its job if it had one going. */
@@ -88,6 +90,8 @@ export interface Crew {
   settled(agentId: string): void;
   /** Answer a pending permission request. */
   resolve(agentId: string, approved: boolean): void;
+  /** Answer the questions they asked: the chosen option (or typed answer) for each question, by its text. */
+  answer(agentId: string, answers: Record<string, string>): void;
   /** Answer the pitch currently in the office. */
   decide(agentId: string, d: Decision): void;
   /** A message from the owner, typed in the Properties panel. */
@@ -115,6 +119,8 @@ export interface Crew {
   createTeam(team: Omit<Team, 'id'>, pictures?: Picture[]): void;
   /** Everyone goes back to working on their own. */
   disbandTeam(teamId: string): void;
+  /** A message from the owner to everyone on a team; the manager decides what happens next. */
+  sayTeam(teamId: string, text: string, pictures?: Picture[]): void;
 }
 
 /** Claude Code's models, for the built-in engine. */

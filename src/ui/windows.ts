@@ -175,7 +175,12 @@ function initSettings() {
       el('h4', undefined, 'New hires use'),
       rowOf(defEngine, defModel),
       el('h4', undefined, 'Approvals'),
-      radios('approvals', draft.approvals, [['auto', 'Auto mode: agents decide what is safe; only risky things ask'], ['ask', 'Ask me before anything changes files']], (v) => (draft.approvals = v)),
+      radios('approvals', draft.approvals, [
+        ['auto', 'Auto mode: agents decide what is safe; only risky things ask'],
+        ['ask', 'Ask me before anything changes files'],
+        ['full', 'Full access (bypass permissions): nothing is checked or asked. Agents can do anything on this PC, deleting files included'],
+      ], (v) => (draft.approvals = v)),
+      el('p', 'hint', 'Whichever you pick, researching agents only read, and questions and plugin installs always come to you.'),
       el('h4', undefined, 'Closing with work in progress'),
       radios('onclose', draft.onClose, [['ask', 'Ask me'], ['finish', 'Let them finish in the background'], ['stop', 'Stop them and close']], (v) => (draft.onClose = v)),
       buttons,

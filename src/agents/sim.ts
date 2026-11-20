@@ -201,6 +201,16 @@ export class Sim implements Crew {
     run.timer = this.clock.delayedCall(secs * 1000, () => this.advance(agentId));
   }
 
+  /** Simulated staff never ask questions; nothing to answer. */
+  answer(agentId: string, answers: Record<string, string>) {
+    this.note(agentId, `Answered: ${Object.values(answers).join(' · ')}`);
+  }
+
+  sayTeam(teamId: string, text: string, pictures: Picture[] = []) {
+    const team = this.teams.get(teamId);
+    if (team) this.say(team.manager, text, pictures);
+  }
+
   /** A risky command was approved or denied. */
   resolve(agentId: string, approved: boolean) {
     const run = this.runs.get(agentId);

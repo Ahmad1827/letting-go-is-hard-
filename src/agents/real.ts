@@ -1,7 +1,7 @@
 import { OWNER } from '../owner';
 import { DEFAULT_SETTINGS, engineIn, teamId, type AgentUsage, type Crew, type CrewHooks, type CrewSave, type UsageWindow } from './crew';
 import { branchFor } from './ideas';
-import type { AgentActivity, AgentStatus, Decision, Idea, Phase, Picture, ProjectInfo, Role, Settings, Team, TermLine } from './types';
+import type { AgentActivity, AgentStatus, Ask, Decision, Idea, Phase, Picture, ProjectInfo, Question, Role, Settings, Team, TermLine } from './types';
 
 /**
  * Real agents: each employee is a headless Claude Code session started by the
@@ -43,10 +43,13 @@ export interface AgentBridge {
   stop(id: string): void;
   answer(id: string, requestId: string, allow: boolean, input: unknown, message?: string): void;
   prepareWork(req: WorkRequest): Promise<WorkPlace>;
+  /** Install a plugin into the engine, for good (user scope). */
+  install(engine: string, plugin: string): Promise<{ ok: boolean; text: string }>;
   onMessage(cb: (id: string, msg: Msg) => void): void;
 }
 
-interface Permission { requestId: string; input: unknown; text: string }
+/** A raised hand: a permission request from Claude Code (requestId), or the office's own install question (no requestId). */
+interface Permission { requestId: string; input: unknown; text: string; ask?: Ask }
 
 interface Staff {
   name: string;
@@ -106,6 +109,10 @@ interface Staff {
   turnTokens: number;
   /** Tool calls in flight, by id, so their results can be summed up the way the tool would. */
   tools: Map<string, string>;
+  /** Teammates' (and the owner's team-wide) messages that came in while they weren't running; they get them with their next prompt. */
+  mail: string[];
+  /** How their current session was started, to restart it (e.g. once a plugin is installed). */
+  lastCfg: StartConfig | null;
 }
 
 interface TeamState extends Team {
@@ -117,6 +124,11 @@ interface TeamState extends Team {
 const DWELL_MS = 4000;
 const PITCH = /```pitch\s*([\s\S]*?)```/;
 const ASSIGN = /```assign\s*([\s\S]*?)```/g;
+const TELL = /```tell\s*([\s\S]*?)```/g;
+const INSTALL = /```install\s*([\s\S]*?)```/g;
+/** Blocks meant for the office, not the screen. */
+const OFFICE_BLOCK = /```(?:pitch|assign|tell|install)/;
+const stripBlocks = (text: string) => text.replace(PITCH, '').replace(ASSIGN, '').replace(TELL, '').replace(INSTALL, '').trim();
 const TEAM_DONE = /^\s*TEAM DONE\s*$/m;
 
 const PITCH_FORMAT = `\`\`\`pitch
@@ -126,14 +138,30 @@ const PITCH_FORMAT = `\`\`\`pitch
 const COMMIT_RULES = `commit with clear messages using the repository's configured git user, and never add Co-Authored-By lines or mention Claude or AI in commits; never push; commit only to your own branch: never merge into, reset, fast-forward or otherwise update any other branch (main and master included) or touch the project's own checkout, since ${OWNER} reviews and merges your branch`;
 
 const RESEARCH_PROMPT = (name: string) => `You are ${name}, a software engineer in ${OWNER}'s office. The current folder holds ${OWNER}'s projects, one per sub-folder (ignore hidden folders).
-Right now you are researching, not building: do not create, edit, move or delete anything, and only run read-only commands. Look around with Glob, Grep and Read.
+Right now you are researching, not building: do not create, edit, move or delete anything, and only run read-only commands. Look around by reading files and with read-only commands (ls, grep, git log...).
 Pick a project, read enough of it to understand it (a handful of files is plenty), and come up with ONE concrete improvement you could build in an afternoon that ${OWNER} would actually want.
 End your reply with exactly one block like this:
 ${PITCH_FORMAT}
 ${OWNER} may also message you directly. Answer briefly and stay in character.`;
 
+/** How teammates talk to each other, and who decides. */
+const TEAM_TALK = (others: string[], manager: string) => `Talk to your teammates (${others.join(', ')}) by writing a block like this, to one name or to "all":
+\`\`\`tell
+{"to": "<name or all>", "text": "<message>"}
+\`\`\`
+Teammates talk to each other directly to coordinate, ask and suggest, but ${manager} has the final say on the plan and on what gets merged: if you disagree, say so to ${manager} and go with their call. Keep messages short and only send one when it helps.`;
+
+/** What every agent can do on this PC, told to all of them. */
+const POWERS = `You have the same tools Claude Code has in a terminal on this PC. Once your work is approved you can run any program, and start apps to test your work (the app you're building, Blender, a browser...): start long-running ones in the background so you aren't stuck waiting, and close what you opened when you're done. Use the MCP tools you have (Blender's, for example, when Blender is open).
+When something is ${OWNER}'s call, ask with the AskUserQuestion tool rather than guessing.
+Skills: every installed skill is yours to use; when one fits, load it with the Skill tool. If the task needs a skill that isn't installed, look for a plugin that has it with \`claude plugin list --available --json\` (the list is long: filter it, e.g. with grep), then end your message with a block like this and stop there:
+\`\`\`install
+{"plugin": "<name>@<marketplace>", "why": "<what it's for, in one line>"}
+\`\`\`
+Only ask for one this task needs, and never for one that's already installed. If ${OWNER} says yes it gets installed and you're restarted with it loaded; if not, carry on without it.`;
+
 const MANAGER_RESEARCH_PROMPT = (name: string, workers: string[]) => `You are ${name}, a manager in ${OWNER}'s office leading a team: ${workers.join(', ')}. The current folder holds ${OWNER}'s projects, one per sub-folder (ignore hidden folders).
-Right now you are researching, not building: do not create, edit, move or delete anything, and only run read-only commands. Look around with Glob, Grep and Read.
+Right now you are researching, not building: do not create, edit, move or delete anything, and only run read-only commands. Look around by reading files and with read-only commands (ls, grep, git log...).
 Pick a project, read enough to understand it, and come up with ONE improvement that ${OWNER} would want and that is big enough for your team of ${workers.length + 1}: it should split into independent pieces people can build in parallel in an afternoon.
 End your reply with exactly one block like this:
 ${PITCH_FORMAT}
@@ -158,12 +186,14 @@ How your team works:
 - Review their work (git log, git diff), merge it into your branch (git merge <branch>), fix conflicts, and run the checks. You can build parts yourself too.
 - Stay inside the project; ${COMMIT_RULES}; never switch branches.
 - When everything is merged and working, reply with a short summary for ${OWNER} and end with a line that says only: TEAM DONE
+${TEAM_TALK(workers, 'you')}
 ${OWNER} may message you; answer briefly and take it into account.`;
 
-const WORKER_PROMPT = (name: string, manager: string, inPlace: boolean) => `You are ${name}, a software engineer on ${manager}'s team in ${OWNER}'s office. ${inPlace ? 'You are working in the project folder, which teammates share, so only touch what your task needs.' : 'You are on your own branch in a git worktree, started from the team branch.'}
+const WORKER_PROMPT = (name: string, manager: string, inPlace: boolean, others: string[]) => `You are ${name}, a software engineer on ${manager}'s team in ${OWNER}'s office. ${inPlace ? 'You are working in the project folder, which teammates share, so only touch what your task needs.' : 'You are on your own branch in a git worktree, started from the team branch.'}
 Rules: do only the task ${manager} gives you; stay inside the current folder; ${COMMIT_RULES}; don't merge and never switch branches.
 When you finish a task, reply with a short summary for ${manager}: what you changed and how to check it.
-${OWNER} or ${manager} may message you; answer briefly.`;
+${TEAM_TALK(others, manager)}
+${OWNER} or a teammate may message you; answer briefly.`;
 
 /** Told to anyone picking a job back up after the app was closed. */
 const RESUME = `You were paused (the office closed, or ${OWNER} put you on hold) while on this and you're back now. Check what you already did here (git status, git log, the files), then carry on and finish the job.`;
@@ -200,6 +230,7 @@ export class RealCrew implements Crew {
       pitched: false, orders: null, ordersPictures: [], team: null, role: null, assignment: null, desk: null,
       activity: 'idle', lastShown: 0, usage: { tokens: 0, cost: 0 }, sessionCost: 0,
       session: null, launchCwd: '', resumeNext: false, retry: null, held: null, inbox: [], live: '', turnTokens: 0, tools: new Map(),
+      mail: [], lastCfg: null,
     };
   }
 
@@ -212,7 +243,7 @@ export class RealCrew implements Crew {
         phase: s.pitched ? 'pitching' : s.phase,
         idea: noPictures(s.idea),
         work: s.workCwd ? { cwd: s.workCwd, mode: s.workMode } : null,
-        desk: s.desk, assignment: s.assignment, session: s.session, held: s.held, inbox: s.inbox,
+        desk: s.desk, assignment: s.assignment, session: s.session, held: s.held, inbox: s.inbox, mail: s.mail,
       })),
       teams: [...this.teams.values()].map(({ job, ...t }) => ({ ...t, job: job && { ...job, idea: noPictures(job.idea) } })),
     };
@@ -223,7 +254,7 @@ export class RealCrew implements Crew {
       this.staff.set(p.id, {
         ...this.fresh(p.name), engine: p.engine, model: p.model, skills: p.skills ?? [], ideas: p.ideas ?? false, usage: { ...p.usage }, seen: new Set(p.seen),
         idea: p.idea, workCwd: p.work?.cwd ?? null, workMode: p.work?.mode ?? 'default', desk: p.desk as WorkPlace | null, assignment: p.assignment,
-        session: p.session ?? null, resumeNext: !!p.session, held: p.held ?? null, inbox: p.inbox ?? [],
+        session: p.session ?? null, resumeNext: !!p.session, held: p.held ?? null, inbox: p.inbox ?? [], mail: p.mail ?? [],
         ...(p.held ? { phase: 'held' as Phase } : {}),
       });
     }
@@ -360,10 +391,69 @@ export class RealCrew implements Crew {
     const s = this.staff.get(agentId);
     const p = s?.permissions.shift();
     if (!s || !p) return;
-    this.bridge.answer(agentId, p.requestId, approved, p.input, approved ? undefined : `${OWNER} said no. Find another way or ask.`);
-    this.note(agentId, approved ? `${OWNER} approved: ${p.text}` : `${OWNER} denied: ${p.text}`);
-    if (s.permissions.length) this.emitNow(agentId, 'awaiting', s.permissions[0].text);
+    if (p.ask?.kind === 'install') void this.install(agentId, p.ask.plugin, approved);
+    else if (p.ask?.kind === 'question') {
+      this.bridge.answer(agentId, p.requestId, false, p.input, `${OWNER} skipped the question. Use your best judgement and say what you picked.`);
+      this.note(agentId, `${OWNER} skipped the question`);
+    } else {
+      this.bridge.answer(agentId, p.requestId, approved, p.input, approved ? undefined : `${OWNER} said no. Find another way or ask.`);
+      this.note(agentId, approved ? `${OWNER} approved: ${p.text}` : `${OWNER} denied: ${p.text}`);
+    }
+    this.nextHand(agentId, s);
+  }
+
+  answer(agentId: string, answers: Record<string, string>) {
+    const s = this.staff.get(agentId);
+    const p = s?.permissions[0];
+    if (!s || p?.ask?.kind !== 'question') return;
+    s.permissions.shift();
+    this.bridge.answer(agentId, p.requestId, true, { ...(p.input as object), answers });
+    const said = Object.values(answers).join(' · ');
+    this.note(agentId, `${OWNER} answered: ${said}`, { k: 'user', text: said });
+    this.nextHand(agentId, s);
+  }
+
+  /** One hand answered: raise it again for the next request, or get back to work. */
+  private nextHand(agentId: string, s: Staff) {
+    const next = s.permissions[0];
+    if (next) this.emitNow(agentId, 'awaiting', next.text, next.ask);
     else this.show(agentId, 'thinking');
+  }
+
+  /** Raise a hand: the owner gets asked in the terminal and the OKs panel. */
+  private raise(agentId: string, s: Staff, p: Permission) {
+    s.permissions.push(p);
+    if (s.permissions.length === 1) this.emitNow(agentId, 'awaiting', p.text, p.ask);
+  }
+
+  /** The owner answered an agent's request for a plugin. Yes: install it and restart them with it loaded. */
+  private async install(agentId: string, plugin: string, ok: boolean) {
+    const s = this.staff.get(agentId)!;
+    const tell = (text: string) => {
+      if (s.alive) this.bridge.send(agentId, text);
+      else s.mail.push(text);
+    };
+    if (!ok) {
+      this.note(agentId, `${OWNER} said no to installing ${plugin}`);
+      return tell(`${OWNER} said no to installing ${plugin}. Carry on without it.`);
+    }
+    this.note(agentId, `Installing ${plugin}...`);
+    const r = await this.bridge.install(s.engine, plugin);
+    if (!this.staff.has(agentId)) return;
+    if (!r.ok) {
+      this.note(agentId, `Couldn't install ${plugin}: ${r.text}`);
+      return tell(`Installing ${plugin} didn't work (${r.text}). Carry on without it.`);
+    }
+    this.note(agentId, `Installed ${plugin}`);
+    this.hooks.term(agentId, { k: 'out', text: r.text });
+    const cfg = s.lastCfg;
+    const back = `${plugin} is installed and its skills are loaded now. Carry on with what you were doing.`;
+    if (!cfg || s.held) return void s.mail.push(back);
+    // a new session picks up the new skills; resuming keeps the conversation
+    this.stopProc(agentId);
+    s.alive = false;
+    s.resumeNext = !!s.session;
+    this.launch(agentId, { ...cfg, prompt: back });
   }
 
   decide(agentId: string, d: Decision) {
@@ -511,9 +601,10 @@ export class RealCrew implements Crew {
     s.since = Date.now();
   }
 
-  /** Permission mode for approved work: auto mode, or the place's own (acceptEdits in a worktree, ask in place). */
+  /** Permission mode for approved work: full access, auto mode, or the place's own (acceptEdits in a worktree, ask in place). */
   private workMode(placeMode: string) {
-    return this.settings.approvals === 'auto' ? 'auto' : placeMode;
+    const a = this.settings.approvals;
+    return a === 'full' ? 'bypassPermissions' : a === 'auto' ? 'auto' : placeMode;
   }
 
   interrupt(agentId: string) {
@@ -566,6 +657,73 @@ export class RealCrew implements Crew {
       else window.setTimeout(() => this.staff.has(id) && !this.staff.get(id)!.held && this.research(id), i * 1500);
     });
     this.pushTeams();
+  }
+
+  sayTeam(teamId: string, text: string, pictures: Picture[] = []) {
+    const team = this.teams.get(teamId);
+    if (!team) return;
+    const message = `${OWNER}, to the whole team: ${text}`;
+    for (const w of team.workers) {
+      const s = this.staff.get(w);
+      if (!s) continue;
+      this.note(w, `${OWNER} (to ${team.name}): ${text}${pictureNote(pictures)}`, { k: 'user', text, pics: pictures.length });
+      if (s.held) s.inbox.push(message);
+      else if (s.alive) this.bridge.send(w, content(message, pictures));
+      else s.mail.push(message);
+    }
+    // the manager acts on it: it may be a task, an answer to a pitch, or a change of plan
+    this.say(team.manager, text, pictures);
+  }
+
+  /** A teammate's message: straight in if they're running, otherwise with their next prompt. */
+  private deliver(fromId: string, toId: string, text: string) {
+    const s = this.staff.get(toId);
+    if (!s) return;
+    const from = this.nameOf(fromId);
+    const message = `${from} (teammate) says: ${text}`;
+    this.note(toId, `${from}: ${text}`, { k: 'user', from, text });
+    if (s.held) s.inbox.push(message);
+    else if (s.alive) this.bridge.send(toId, message);
+    else s.mail.push(message);
+  }
+
+  private parseTells(agentId: string, team: TeamState, text: string) {
+    const members = [team.manager, ...team.workers].filter((id) => id !== agentId);
+    for (const m of text.matchAll(TELL)) {
+      try {
+        const raw = JSON.parse(m[1]) as { to?: string; text?: string };
+        const to = String(raw.to ?? '').trim().toLowerCase();
+        if (!raw.text) continue;
+        const targets = ['all', 'everyone', 'team'].includes(to) ? members : members.filter((id) => this.nameOf(id).toLowerCase().startsWith(to)).slice(0, 1);
+        if (!targets.length) {
+          this.bridge.send(agentId, `Nobody called "${raw.to}" on your team. Your teammates: ${members.map((id) => this.nameOf(id)).join(', ')}.`);
+          continue;
+        }
+        for (const id of targets) this.deliver(agentId, id, raw.text);
+      } catch {
+        this.bridge.send(agentId, 'One of your tell blocks was not valid JSON. Please write it again.');
+      }
+    }
+  }
+
+  /** They asked for a plugin to be installed. */
+  private parseInstalls(agentId: string, s: Staff, text: string) {
+    for (const m of text.matchAll(INSTALL)) {
+      try {
+        const raw = JSON.parse(m[1]) as { plugin?: string; why?: string };
+        const plugin = String(raw.plugin ?? '').trim();
+        if (!plugin || s.permissions.some((p) => p.ask?.kind === 'install' && p.ask.plugin === plugin)) continue;
+        if (this.background) {
+          this.note(agentId, `Wanted ${plugin}, but ${OWNER} is away`);
+          this.bridge.send(agentId, `${OWNER} is away, so ${plugin} can't be installed now. Carry on without it and mention it in your summary.`);
+          continue;
+        }
+        const why = String(raw.why ?? '').trim();
+        this.raise(agentId, s, { requestId: '', input: null, text: `install ${plugin}${why ? `: ${why}` : ''}`, ask: { kind: 'install', plugin, why } });
+      } catch {
+        this.bridge.send(agentId, 'Your install block was not valid JSON. Please write it again.');
+      }
+    }
   }
 
   private removeFromTeam(agentId: string) {
@@ -754,7 +912,8 @@ export class RealCrew implements Crew {
 
   private workerSystem(w: Staff) {
     const team = this.teamOf(w);
-    return WORKER_PROMPT(w.name, this.nameOf(team?.manager ?? ''), !!team?.job?.inPlace);
+    const others = team ? [team.manager, ...team.workers].filter((id) => this.staff.get(id) !== w).map((id) => this.nameOf(id)) : [];
+    return WORKER_PROMPT(w.name, this.nameOf(team?.manager ?? ''), !!team?.job?.inPlace, others);
   }
 
   /** The manager says the team's job is merged and done. */
@@ -782,7 +941,12 @@ export class RealCrew implements Crew {
     s.resumeNext = false;
     s.launchCwd = cwd;
     s.retry = resume ? cfg : null;
-    this.bridge.start(agentId, { ...cfg, resume, engine: s.engine, model: cfg.model ?? (s.model || undefined), skills: s.skills }).catch((e: Error) => {
+    s.lastCfg = cfg;
+    // whatever teammates said while they weren't running comes first
+    const mail = s.mail.splice(0);
+    const prompt = mail.length ? withText(cfg.prompt, `Messages that came in for you:\n${mail.map((m) => `- ${m}`).join('\n')}`) : cfg.prompt;
+    const system = `${cfg.system}\n\n${POWERS}`;
+    this.bridge.start(agentId, { ...cfg, system, prompt, resume, engine: s.engine, model: cfg.model ?? (s.model || undefined), skills: s.skills }).catch((e: Error) => {
       s.alive = false;
       this.note(agentId, `Couldn't start Claude Code: ${e.message}`);
     });
@@ -818,7 +982,7 @@ export class RealCrew implements Crew {
     if (msg.kind === 'delta') {
       s.live += msg.text;
       // the pitch and assign blocks are for the office, not the screen
-      const shown = s.live.split(/```(?:pitch|assign)/)[0].trim();
+      const shown = s.live.split(OFFICE_BLOCK)[0].trim();
       if (shown) this.hooks.live(agentId, shown);
       return;
     }
@@ -834,8 +998,9 @@ export class RealCrew implements Crew {
       case 'assistant':
         for (const part of msg.parts) {
           if (part.type === 'text') {
-            const shown = part.text.replace(PITCH, '').replace(ASSIGN, '').trim();
+            const shown = stripBlocks(part.text);
             if (shown) this.note(agentId, `${s.name}: ${shown}`, { k: 'text', text: shown });
+            this.parseInstalls(agentId, s, part.text);
             const idea = this.parsePitch(s, part.text);
             if (idea && (s.phase === 'research' || s.phase === 'queued')) {
               s.idea = idea;
@@ -843,6 +1008,7 @@ export class RealCrew implements Crew {
             }
             const team = this.teamOf(s);
             if (team && s.role === 'manager' && s.phase === 'work') this.parseAssignments(team, part.text);
+            if (team) this.parseTells(agentId, team, part.text);
             if (busy) this.show(agentId, 'thinking');
           } else {
             const [activity, text] = describe(part.name, part.input, this.root());
@@ -853,25 +1019,31 @@ export class RealCrew implements Crew {
         }
         break;
       case 'permission': {
+        if (msg.tool === 'AskUserQuestion') {
+          this.question(agentId, s, msg);
+          break;
+        }
         const text = permissionText(msg.tool, msg.input, this.root());
-        if ((s.phase === 'research' || s.phase === 'queued') && readOnlyCommand(msg.tool, msg.input)) {
+        const researching = s.phase === 'research' || s.phase === 'queued';
+        if (researching && readOnlyCommand(msg.tool, msg.input)) {
           this.bridge.answer(agentId, msg.requestId, true, msg.input);
-        } else if (s.phase === 'research' || s.phase === 'queued') {
+        } else if (researching) {
           this.bridge.answer(agentId, msg.requestId, false, msg.input, `You're only researching right now. Don't change anything; pitch the idea to ${OWNER} first.`);
           this.note(agentId, `(tried to ${text} while researching; told no)`);
         } else if (this.autoApprove) {
           this.bridge.answer(agentId, msg.requestId, true, msg.input);
           this.note(agentId, `Auto-approved: ${text}`);
+        } else if (this.background && this.settings.approvals !== 'ask') {
+          // away, in auto mode or full access: they carry on the way they would with the owner here
+          this.bridge.answer(agentId, msg.requestId, true, msg.input);
+          this.note(agentId, `Allowed while ${OWNER} is away: ${text}`);
         } else if (this.background) {
-          // nobody to ask: fine inside their own branch folder, not anywhere else
+          // asked to be asked, and nobody to ask: fine inside their own branch folder, not anywhere else
           // an MCP server reaches outside the branch folder (Blender, Drive...), so that waits for them too
           const isolated = !mcpName(msg.tool) && !!s.workCwd?.replace(/\\/g, '/').includes('/.letting-go/worktrees/');
           this.bridge.answer(agentId, msg.requestId, isolated, msg.input, isolated ? undefined : `${OWNER} is away. Skip anything that needs approval and mention it in your summary.`);
-          this.note(agentId, `${isolated ? 'Allowed (own branch, while away)' : 'Skipped (needs approval, Ahmad is away)'}: ${text}`);
-        } else {
-          s.permissions.push({ requestId: msg.requestId, input: msg.input, text });
-          if (s.permissions.length === 1) this.emitNow(agentId, 'awaiting', text);
-        }
+          this.note(agentId, `${isolated ? 'Allowed (own branch, while away)' : `Skipped (needs approval, ${OWNER} is away)`}: ${text}`);
+        } else this.raise(agentId, s, { requestId: msg.requestId, input: msg.input, text });
         break;
       }
       case 'results':
@@ -916,6 +1088,8 @@ export class RealCrew implements Crew {
   }
 
   private onTurnEnd(agentId: string, s: Staff, msg: Extract<Msg, { kind: 'result' }>) {
+    // waiting to hear about a plugin: they pick up from there once it's decided
+    if (s.permissions.some((p) => p.ask?.kind === 'install')) return;
     const team = this.teamOf(s);
     if (s.phase === 'research') {
       if (s.idea && s.orders) {
@@ -956,6 +1130,17 @@ export class RealCrew implements Crew {
       if (TEAM_DONE.test(msg.text)) this.teamDone(team, msg.text);
       else this.show(agentId, team.workers.some((w) => this.staff.get(w)?.assignment) ? 'standby' : 'thinking');
     } else this.finishWork(agentId, msg.text);
+  }
+
+  /** They asked the owner something (AskUserQuestion): it goes to the terminal, unless nobody's there to answer. */
+  private question(agentId: string, s: Staff, msg: Extract<Msg, { kind: 'permission' }>) {
+    const questions = (Array.isArray(msg.input.questions) ? msg.input.questions : []) as Question[];
+    if (this.background || !questions.length) {
+      this.bridge.answer(agentId, msg.requestId, false, msg.input, `${OWNER} is away. Make the call yourself and mention what you picked in your summary.`);
+      this.note(agentId, `Asked ${OWNER} something while away; deciding on their own`);
+      return;
+    }
+    this.raise(agentId, s, { requestId: msg.requestId, input: msg.input, text: `asks: ${short(questions[0].question, 150)}`, ask: { kind: 'question', questions } });
   }
 
   private parsePitch(s: Staff, text: string): Idea | null {
@@ -1058,13 +1243,13 @@ export class RealCrew implements Crew {
     this.hooks.live(agentId, null);
   }
 
-  private emitNow(agentId: string, activity: AgentActivity, detail?: string) {
+  private emitNow(agentId: string, activity: AgentActivity, detail?: string, ask?: Ask) {
     const s = this.staff.get(agentId)!;
     window.clearTimeout(s.showTimer);
     s.showTimer = undefined;
     s.activity = activity;
     s.lastShown = Date.now();
-    this.hooks.emit({ agentId, activity, detail, task: s.idea?.title });
+    this.hooks.emit({ agentId, activity, detail, task: s.idea?.title, ask });
   }
 
   private note(agentId: string, text: string, line?: TermLine | null) {
@@ -1079,6 +1264,12 @@ function content(text: string, pictures: Picture[] = []): Content {
     ...pictures.map((p) => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: p.mediaType, data: p.data } })),
     { type: 'text' as const, text },
   ];
+}
+
+/** A message with more text added at the end. */
+function withText(message: Content, more: string): Content {
+  if (typeof message === 'string') return `${message}\n\n${more}`;
+  return [...message, { type: 'text' as const, text: more }];
 }
 
 const pictureNote = (pictures?: Picture[]) => (pictures?.length ? ` [${pictures.length} picture${pictures.length > 1 ? 's' : ''}]` : '');
@@ -1103,7 +1294,7 @@ function readOnlyCommand(tool: string, input: Record<string, unknown>) {
   if (tool !== 'Bash') return false;
   const cmd = String(input.command ?? '').replace(/\d?>\s*\/dev\/null/g, '');
   if (/[>`]|\$\(|-exec|-delete|-fprint|--output/.test(cmd)) return false;
-  const LOOK = /^(ls|cat|head|tail|wc|pwd|cd|echo|find|tree|file|stat|du|grep|rg|uniq|for|do|done|git (log|status|show|diff|ls-files|rev-parse|remote -v))(\s|$)/;
+  const LOOK = /^(ls|cat|head|tail|wc|pwd|cd|echo|find|tree|file|stat|du|grep|rg|uniq|for|do|done|git (log|status|show|diff|ls-files|rev-parse|remote -v)|claude plugins? (list|details|marketplace list)|curl -s "http:\/\/127\.0\.0\.1:\d+\/(shot|windows)\?[^"\s]*")(\s|$)/;
   return cmd.split(/&&|\|\||[;|\n]/).every((part) => !part.trim() || LOOK.test(part.trim()));
 }
 

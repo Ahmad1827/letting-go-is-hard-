@@ -14,7 +14,11 @@ contextBridge.exposeInMainWorld('office', {
     save: (data) => ipcRenderer.send('memory:save', data),
   },
   /** The skills an engine has installed. */
-  skills: { list: (engine) => ipcRenderer.invoke('skills:list', engine) },
+  skills: {
+    list: (engine) => ipcRenderer.invoke('skills:list', engine),
+    /** Install a plugin (and its skills) an agent asked for, once the owner said yes. */
+    install: (engine, plugin) => ipcRenderer.invoke('skills:install', engine, plugin),
+  },
   /** The Claude plan's usage right now, as Claude Code's /usage shows it. */
   usage: { get: () => ipcRenderer.invoke('usage:get') },
   app: {
@@ -37,6 +41,7 @@ contextBridge.exposeInMainWorld('office', {
     stop: (id) => ipcRenderer.send('agent:stop', id),
     answer: (id, requestId, allow, input, message) => ipcRenderer.send('agent:answer', id, requestId, allow, input, message),
     prepareWork: (req) => ipcRenderer.invoke('work:prepare', req),
+    install: (engine, plugin) => ipcRenderer.invoke('skills:install', engine, plugin),
     onMessage: (cb) => ipcRenderer.on('agent:msg', (_e, id, msg) => cb(id, msg)),
   },
 });

@@ -20,7 +20,22 @@ export interface AgentEvent {
   task?: string;
   /** For 'queued': place in line, 1 = next to go in. */
   queue?: number;
+  /** For 'awaiting': what they want, when it's more than a yes or no to a command. */
+  ask?: Ask;
 }
+
+/** A multiple-choice question from an agent, as Claude Code's AskUserQuestion tool puts it. */
+export interface Question {
+  question: string;
+  header?: string;
+  options: { label: string; description?: string }[];
+  multiSelect?: boolean;
+}
+
+/** A raised hand that isn't a plain yes/no: questions to answer, or a plugin they'd like installed. */
+export type Ask =
+  | { kind: 'question'; questions: Question[] }
+  | { kind: 'install'; plugin: string; why: string };
 
 /** A folder in the projects root, as the machine described it. */
 export interface ProjectInfo {
@@ -97,8 +112,11 @@ export interface Settings {
   defaultModel: string;
   /** Skills new hires start with. */
   defaultSkills: string[];
-  /** 'auto': the engine's auto mode decides what's safe; 'ask': anything that changes files asks first. */
-  approvals: 'auto' | 'ask';
+  /**
+   * 'auto': the engine's auto mode decides what's safe; 'ask': anything that changes files asks first;
+   * 'full': nothing is checked or asked (bypass permissions).
+   */
+  approvals: 'auto' | 'ask' | 'full';
   /** On closing with work in progress. */
   onClose: 'ask' | 'finish' | 'stop';
 }

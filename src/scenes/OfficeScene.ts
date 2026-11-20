@@ -8,7 +8,7 @@ import { Agent } from '../agents/Agent';
 import { DEFAULT_SETTINGS, type Crew, type CrewHooks, type CrewSave } from '../agents/crew';
 import { RealCrew, type AgentBridge } from '../agents/real';
 import { Sim } from '../agents/sim';
-import type { AgentEvent, Decision, Idea, Picture, ProjectInfo, Settings, Team, TermEntry, TermLine } from '../agents/types';
+import type { AgentEvent, Ask, Decision, Idea, Picture, ProjectInfo, Settings, Team, TermEntry, TermLine } from '../agents/types';
 import type { AgentView, ApprovalView, PitchView } from '../ui/hud';
 import {
   BAND_ROWS, BOSS_MONITOR, COLS, ELEVATORS, HEIGHT, OUTBOX, ROWS, TILE, WIDTH, desks, props, rooms, spots, walls,
@@ -126,7 +126,8 @@ export class OfficeScene extends Phaser.Scene {
   private racks: Phaser.GameObjects.Sprite[] = [];
   private doors: [Phaser.GameObjects.Image, Phaser.GameObjects.Image][] = [];
   private ring!: Phaser.GameObjects.Image;
-  private pending = new Map<string, string>();
+  /** Raised hands: what each agent is waiting on. */
+  private pending = new Map<string, { detail: string; ask?: Ask }>();
   /** Order of terminal lines across the whole office, so a team's terminals interleave correctly. */
   private termN = 0;
   private papers: Phaser.GameObjects.Image[] = [];
@@ -229,6 +230,12 @@ export class OfficeScene extends Phaser.Scene {
       if (t) this.hold([t.manager, ...t.workers], on);
     });
     bus.on('approval:resolve', ({ id, ok }: { id: string; ok: boolean }) => this.resolve(id, ok));
+    bus.on('approval:answer', ({ id, answers }: { id: string; answers: Record<string, string> }) => {
+      if (!this.pending.delete(id)) return;
+      this.pushApprovals();
+      this.crew.answer(id, answers);
+    });
+    bus.on('team:say', ({ id, text, pictures }: { id: string; text: string; pictures?: Picture[] }) => this.crew.sayTeam(id, text, pictures));
     bus.on('pitch:decide', ({ id, decision }: { id: string; decision: Decision }) => this.crew.decide(id, decision));
     bus.on('agent:say', ({ id, text, pictures }: { id: string; text: string; pictures?: Picture[] }) => this.crew.say(id, text, pictures));
     bus.on('agent:model', ({ id, model }: { id: string; model: string }) => {
@@ -259,7 +266,8 @@ export class OfficeScene extends Phaser.Scene {
     bus.on('team:disband', (id: string) => this.crew.disbandTeam(id));
     bus.on('autoapprove', (on: boolean) => {
       this.crew.autoApprove = on;
-      if (on) for (const id of [...this.pending.keys()]) this.resolve(id, true);
+      // commands get approved; questions and plugin installs still wait for a real answer
+      if (on) for (const [id, p] of [...this.pending]) if (!p.ask) this.resolve(id, true);
     });
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => bus.removeAllListeners());
   }
@@ -695,7 +703,7 @@ export class OfficeScene extends Phaser.Scene {
     a.task = ev.task ?? a.task;
     if (ev.detail) this.note(a.id, ev.detail);
     if (ev.activity === 'awaiting') {
-      this.pending.set(a.id, ev.detail ?? 'Permission needed');
+      this.pending.set(a.id, { detail: ev.detail ?? 'Permission needed', ask: ev.ask });
       this.pushApprovals();
     }
 
@@ -796,7 +804,7 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   private pushApprovals() {
-    const list: ApprovalView[] = [...this.pending].map(([id, detail]) => ({ id, name: this.agents.get(id)?.name ?? id, detail }));
+    const list: ApprovalView[] = [...this.pending].map(([id, p]) => ({ id, name: this.agents.get(id)?.name ?? id, detail: p.detail, ask: p.ask }));
     bus.emit('approvals', list);
     if (list.length) this.bossScreen.play('scr-alert', true);
     else this.bossScreen.stop().setFrame('desktop');

@@ -10,7 +10,7 @@ import { byId } from './dom';
 
 export type PanelName = 'staff' | 'office' | 'requests' | 'agent' | 'usage' | 'music';
 
-const NAMES: PanelName[] = ['staff', 'office', 'requests', 'agent', 'usage', 'music'];
+export const NAMES: PanelName[] = ['staff', 'office', 'requests', 'agent', 'usage', 'music'];
 const KEY = 'lgih.windows';
 /** Matches the close animation in style.css. */
 const CLOSE_MS = 200;
@@ -20,6 +20,17 @@ const KEEP = 80;
 
 /** 12x11 pixel icons for the rail; # is a lit pixel. */
 const ICONS: Record<string, string[]> = {
+  terms: [
+    '############',
+    '#..........#',
+    '#.#........#',
+    '#..#.......#',
+    '#...#......#',
+    '#..#.......#',
+    '#.#..####..#',
+    '#..........#',
+    '############',
+  ],
   staff: [
     '............',
     '..##....##..',

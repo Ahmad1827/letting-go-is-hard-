@@ -1,6 +1,6 @@
 import { bus } from '../bus';
 import { DEFAULT_SETTINGS, engineIn, modelLabel } from '../agents/crew';
-import type { AgentActivity, Settings, Team, TermEntry } from '../agents/types';
+import type { AgentActivity, Question, Settings, Team, TermEntry } from '../agents/types';
 import { el } from './dom';
 import { labelOf, type AgentView, type ApprovalView } from './hud';
 import { raise } from './panels';
@@ -12,7 +12,11 @@ import { acceptPictures } from './paste';
  * ❯ prompt, Esc interrupts, and permission questions are answered inline.
  *
  * A team gets one too: everyone's lines interleaved, each tagged with who said
- * it. Messages go to the manager unless they start with @name or @all.
+ * it. Messages go to the whole team (the manager decides what happens) unless
+ * they start with @name.
+ *
+ * The same terminals also live docked in the terminal view (see deck.ts):
+ * no dragging or closing there, the view lays them out.
  */
 
 const BUSY: AgentActivity[] = ['thinking', 'reading', 'writing', 'running'];
@@ -100,8 +104,10 @@ class Term {
   private colors = new Map<string, string>();
   /** What each person is writing right now, kept at the bottom of the log until the finished line replaces it. */
   private liveRows = new Map<string, { row: HTMLElement; body: HTMLElement }>();
+  /** Answering questions: which one is up, and what's been answered so far. */
+  private quiz: { key: string; at: number; answers: Record<string, string>; picked: Set<number> } | null = null;
 
-  constructor(readonly key: string, readonly agentId: string | null, readonly teamId: string | null) {
+  constructor(readonly key: string, readonly agentId: string | null, readonly teamId: string | null, readonly dock: HTMLElement | null = null) {
     const bar = el('header', 'term-bar');
     const tab = el('span', 'term-tab');
     tab.append(el('span', 'term-star', '✱'), this.tabLabel);
@@ -133,6 +139,15 @@ class Term {
     this.screen.addEventListener('mouseup', () => {
       if (window.getSelection()?.isCollapsed) this.input.focus();
     });
+    if (dock) {
+      // the terminal view places and sizes it
+      this.win.classList.add('docked');
+      ctrls.hidden = true;
+      dock.append(this.win);
+      this.update();
+      this.screen.scrollTop = this.screen.scrollHeight;
+      return;
+    }
     this.win.addEventListener('pointerdown', () => raise(this.win));
     this.drag(bar);
 
@@ -164,6 +179,7 @@ class Term {
   }
 
   clamp() {
+    if (this.dock) return;
     const p = places[this.key];
     p.x = Math.round(Math.min(Math.max(p.x, KEEP - this.win.offsetWidth), innerWidth - KEEP));
     p.y = Math.round(Math.min(Math.max(p.y, 0), innerHeight - 36));
@@ -197,14 +213,25 @@ class Term {
 
   show() {
     this.win.classList.remove('min');
-    raise(this.win);
+    if (!this.dock) raise(this.win);
     this.input.focus();
   }
 
+  focus() {
+    this.input.focus({ preventScroll: true });
+    this.screen.scrollTop = this.screen.scrollHeight;
+  }
+
   close() {
-    terms.delete(this.key);
+    if (terms.get(this.key) === this) terms.delete(this.key);
+    if (this.dock) return this.win.remove();
     this.win.classList.add('closing');
     window.setTimeout(() => this.win.remove(), 180);
+  }
+
+  /** Still showing someone (or a team) who's around. */
+  get alive() {
+    return terms.get(this.key) === this;
   }
 
   private team() {
@@ -423,7 +450,9 @@ class Term {
 
   private renderAsk(ids: string[]) {
     const p = this.pending(ids);
-    const key = p ? `${p.id}|${p.detail}|${this.choice}` : '';
+    const quizKey = p?.ask?.kind === 'question' ? `${p.id}|${p.detail}` : '';
+    if (this.quiz?.key !== quizKey) this.quiz = quizKey ? { key: quizKey, at: 0, answers: {}, picked: new Set() } : null;
+    const key = p ? `${p.id}|${p.detail}|${this.choice}|${this.quiz ? `${this.quiz.at}:${[...this.quiz.picked]}` : ''}` : '';
     if (key === this.askKey) return;
     if (!p) this.choice = 0;
     this.askKey = key;
@@ -432,9 +461,11 @@ class Term {
       this.input.placeholder = this.placeholder();
       return;
     }
+    if (p.ask?.kind === 'question') return this.renderQuestion(p.name, p.ask.questions);
     const run = p.detail.match(/^run: ([\s\S]*)$/);
-    const title = el('b', undefined, `${this.teamId ? `${p.name}: ` : ''}${run ? 'Bash command' : 'Permission needed'}`);
-    const what = el('pre', 't-ask-what', run ? run[1] : p.detail);
+    const install = p.ask?.kind === 'install' ? p.ask : null;
+    const title = el('b', undefined, `${this.teamId ? `${p.name}: ` : ''}${run ? 'Bash command' : install ? 'Install a plugin' : 'Permission needed'}`);
+    const what = el('pre', 't-ask-what', run ? run[1] : install ? `${install.plugin}${install.why ? `\n${install.why}` : ''}` : p.detail);
     const options = ['Yes', 'No, and tell them to find another way'].map((label, i) => {
       const o = el('div', `t-opt${i === this.choice ? ' on' : ''}`, `${i === this.choice ? '❯' : ' '} ${i + 1}. ${label}`);
       o.onclick = () => this.answer(i === 0);
@@ -453,23 +484,87 @@ class Term {
     this.choice = 0;
   }
 
+  /** The question that's up, Claude Code style: numbered options, "type something" for your own answer. */
+  private renderQuestion(name: string, questions: Question[]) {
+    const quiz = this.quiz!;
+    const q = questions[quiz.at];
+    const n = q.options.length;
+    // the extra row at the bottom: submit for multi-select
+    const rows = q.multiSelect ? n + 1 : n;
+    this.choice = Math.min(this.choice, rows - 1);
+    const head = el('div', 't-q-head');
+    if (q.header) head.append(el('span', 't-q-chip', q.header));
+    if (questions.length > 1) head.append(el('span', 'dim', ` ${quiz.at + 1} of ${questions.length}`));
+    const title = el('b', undefined, `${this.teamId ? `${name}: ` : ''}${q.question}`);
+    const options = q.options.map((o, i) => {
+      const tick = q.multiSelect ? (quiz.picked.has(i) ? '[x] ' : '[ ] ') : '';
+      const row = el('div', `t-opt${i === this.choice ? ' on' : ''}`);
+      row.append(`${i === this.choice ? '❯' : ' '} ${i + 1}. ${tick}${o.label}`);
+      if (o.description) row.append(el('span', 'dim', `  ${o.description}`));
+      row.onclick = () => this.pick(i);
+      return row;
+    });
+    if (q.multiSelect) {
+      const submit = el('div', `t-opt${this.choice === n ? ' on' : ''}`, `${this.choice === n ? '❯' : ' '}    Submit`);
+      submit.onclick = () => this.pick(n);
+      options.push(submit);
+    }
+    const hint = el('div', 'dim', 'Or type your own answer below · Esc skips the question');
+    this.ask.replaceChildren(head, title, ...options, hint);
+    this.input.placeholder = q.multiSelect ? 'Press a number to tick, Enter on Submit (or type your own answer)' : 'Press a number (or ↑↓ and Enter), or type your own answer';
+    this.screen.scrollTop = this.screen.scrollHeight;
+  }
+
+  private questions() {
+    const p = this.pending(this.members());
+    return p?.ask?.kind === 'question' ? { id: p.id, questions: p.ask.questions } : null;
+  }
+
+  /** Option i of the question that's up (or Submit, for multi-select). */
+  private pick(i: number) {
+    const cur = this.questions();
+    if (!cur || !this.quiz) return;
+    const q = cur.questions[this.quiz.at];
+    if (q.multiSelect && i < q.options.length) {
+      if (!this.quiz.picked.delete(i)) this.quiz.picked.add(i);
+      this.choice = i;
+      return this.renderAsk(this.members());
+    }
+    const text = q.multiSelect ? [...this.quiz.picked].sort().map((k) => q.options[k].label).join(', ') : q.options[i]?.label;
+    if (!text) return;
+    this.answerWith(text);
+  }
+
+  /** Answer the question that's up and move on to the next one, or send them all. */
+  private answerWith(text: string) {
+    const cur = this.questions();
+    if (!cur || !this.quiz) return;
+    const q = cur.questions[this.quiz.at];
+    this.quiz.answers[q.question] = text;
+    this.quiz.picked.clear();
+    this.choice = 0;
+    if (this.quiz.at + 1 < cur.questions.length) {
+      this.quiz.at++;
+      return this.renderAsk(this.members());
+    }
+    bus.emit('approval:answer', { id: cur.id, answers: this.quiz.answers });
+    this.quiz = null;
+  }
+
   private placeholder() {
     if (!this.teamId) return '';
-    const m = viewOf(this.members()[0]);
-    return `Message ${m?.name ?? 'the manager'}, or @name / @all`;
+    return 'Message the whole team, or @name for one person';
   }
 
   private renderFoot(ids: string[]) {
     const auto = settings.approvals === 'auto';
     const lead = viewOf(ids[0])!;
-    const right = this.teamId ? `to ${lead.name} · @name · @all · /help` : `${modelLabel(settings, lead.status.engine, lead.model)} · /help`;
-    const key = `${auto}|${right}`;
+    const right = this.teamId ? `to everyone · ${lead.name} decides · @name · /help` : `${modelLabel(settings, lead.status.engine, lead.model)} · /help`;
+    const key = `${settings.approvals}|${right}`;
     if (key === this.footKey) return;
     this.footKey = key;
-    this.foot.replaceChildren(
-      el('span', auto ? 'auto' : 'dim', auto ? '⏵⏵ auto mode on' : '⏵ asks before changing files'),
-      el('span', 'dim', right),
-    );
+    const mode = settings.approvals === 'full' ? ['full', '⏵⏵ bypass permissions on'] : auto ? ['auto', '⏵⏵ auto mode on'] : ['dim', '⏵ asks before changing files'];
+    this.foot.replaceChildren(el('span', mode[0], mode[1]), el('span', 'dim', right));
   }
 
   /** Called a few times a second, only for the spinner. */
@@ -486,7 +581,36 @@ class Term {
   private onKey(e: KeyboardEvent) {
     const empty = !this.input.value;
     const asking = !!this.pending(this.members());
-    if (asking && empty) {
+    const quiz = this.questions();
+    if (quiz && this.quiz) {
+      const q = quiz.questions[this.quiz.at];
+      const rows = q.options.length + (q.multiSelect ? 1 : 0);
+      const num = Number(e.key);
+      if (empty && Number.isInteger(num) && num >= 1 && num <= q.options.length) {
+        e.preventDefault();
+        return this.pick(num - 1);
+      }
+      if (empty && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        e.preventDefault();
+        this.choice = (this.choice + (e.key === 'ArrowUp' ? rows - 1 : 1)) % rows;
+        return this.renderAsk(this.members());
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        const typed = this.input.value.trim();
+        if (!typed) return this.pick(this.choice);
+        this.input.value = '';
+        this.fit();
+        return this.answerWith(typed);
+      }
+      if (e.key === 'Escape' && empty) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.quiz = null;
+        return this.answer(false);
+      }
+    }
+    if (asking && empty && !quiz) {
       if (e.key === '1' || e.key === '2') {
         e.preventDefault();
         return this.answer(e.key === '1');
@@ -513,6 +637,7 @@ class Term {
         busy.forEach((id) => bus.emit('agent:stop', id));
         this.print('Interrupted · tell them what to do instead');
       } else if (this.input.value) this.input.value = '';
+      else if (this.dock) bus.emit('deck:out');
       return;
     }
     // ↑ and ↓ at the edges of the box walk through what was sent before
@@ -548,22 +673,24 @@ class Term {
     this.fit();
     if (raw.startsWith('/')) return this.command(raw);
     const ids = this.members();
-    let targets = ids.slice(0, 1);
+    let target: string | null = this.teamId ? null : ids[0];
     let text = raw;
     const at = this.teamId ? raw.match(/^@(\S+)\s*([\s\S]*)$/) : null;
     if (at) {
       const who = at[1].toLowerCase();
-      if (who === 'all' || who === 'everyone' || who === 'team') targets = ids;
-      else {
+      if (!['all', 'everyone', 'team'].includes(who)) {
         const found = ids.filter((id) => viewOf(id)!.name.toLowerCase().startsWith(who));
-        if (!found.length) return this.print(`Nobody called "${at[1]}" on this team. Try ${ids.map((id) => `@${viewOf(id)!.name}`).join(', ')} or @all.`);
-        targets = found.slice(0, 1);
+        if (!found.length) return this.print(`Nobody called "${at[1]}" on this team. Try ${ids.map((id) => `@${viewOf(id)!.name}`).join(', ')}, or no @ for everyone.`);
+        target = found[0];
       }
       text = at[2].trim();
     }
     const pictures = this.pics.take();
     if (!text && !pictures.length) return;
-    for (const id of targets) bus.emit('agent:say', { id, text: text || 'Have a look at this picture.', pictures });
+    text ||= 'Have a look at this picture.';
+    // no @: the whole team hears it, and the manager decides what happens
+    if (target) bus.emit('agent:say', { id: target, text, pictures });
+    else bus.emit('team:say', { id: this.teamId, text, pictures });
   }
 
   private command(raw: string) {
@@ -575,7 +702,7 @@ class Term {
       case '?':
         return [
           'Enter sends · Shift+Enter new line · Esc interrupts · ↑ previous message · Ctrl+V pastes a picture',
-          ...(this.teamId ? ['@Name message talks to one person, @all to everyone; otherwise it goes to the manager'] : []),
+          ...(this.teamId ? ['A message goes to the whole team and the manager decides what happens; @Name message talks to one person'] : []),
           '/clear clears this screen (they still remember everything)',
           '/stop interrupts what they are doing',
           '/hold puts them on hold · /reopen brings them back',
@@ -626,7 +753,20 @@ class Term {
   }
 }
 
+/** A terminal for the terminal view, laid out by it: one person (agentId) or a team. */
+export function dockTerm(parent: HTMLElement, agentId: string | null, teamId: string | null) {
+  const key = `d:${agentId ? `a:${agentId}` : `t:${teamId}`}`;
+  terms.get(key)?.close();
+  const t = new Term(key, agentId, teamId, parent);
+  terms.set(key, t);
+  return t;
+}
+
+export type { Term };
+
 function openTerm(key: string, agentId: string | null, teamId: string | null) {
+  // in the terminal view the deck shows it instead
+  if (document.body.classList.contains('deck-on')) return;
   // the Work Board covers the windows; get it out of the way
   const board = document.getElementById('board-pop');
   if (board) board.hidden = true;

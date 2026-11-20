@@ -1,4 +1,4 @@
-// Skills: what the engine has installed, and how to limit an agent to the ones picked for them.
+// Skills: what the engine has installed, for the picker and the agents' go-to lists.
 import { spawn } from 'node:child_process';
 import readline from 'node:readline';
 
@@ -68,18 +68,7 @@ export function catalog(key, launch, { fresh = false } = {}) {
   return result;
 }
 
-/**
- * Settings that leave an agent with only the picked skills. Hiding takes a
- * skill out of what the agent is told about, and the deny rules also stop the
- * ones hiding can't reach, such as plugin skills.
- */
-export function skillSettings(all, picked) {
-  const hidden = all.filter((id) => !picked.includes(id));
-  return {
-    disableBundledSkills: true,
-    skillOverrides: { ...Object.fromEntries(hidden.map((id) => [id, 'off'])), ...Object.fromEntries(picked.map((id) => [id, 'on'])) },
-    permissions: { deny: hidden.map((id) => `Skill(${id})`) },
-  };
-}
+/** Forget the last look, e.g. after a plugin was installed. */
+export const forget = (key) => cache.delete(key);
 
-export const skillPrompt = (picked) => `Your skills: ${picked.join(', ')}. When one fits what you're doing, load it with the Skill tool and follow it.`;
+export const skillPrompt = (picked) => `Your go-to skills: ${picked.join(', ')}. Reach for these first when they fit.`;

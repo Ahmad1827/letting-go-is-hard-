@@ -25,12 +25,28 @@
         <button class="tab" id="tab-usage" data-panel="usage" title="Claude Code usage"><i data-icon="usage"></i><span id="usage-meter" class="mini-meter"></span></button>
         <button class="tab" id="tab-music" data-panel="music" title="Music"><i data-icon="music"></i></button>
         <span class="dock-sep"></span>
+        <button class="tab" id="view-toggle" title="Terminal view: every agent and group as a terminal (T)"><i data-icon="terms"></i></button>
         <button class="tab" id="board-open" title="Work Board: everyone and what they're working on"><i data-icon="board"></i></button>
         <button class="tab" id="settings-open" title="Settings"><i data-icon="settings"></i></button>
         <button class="tab" id="power" title="Close the office"><i data-icon="power"></i></button>
         <span id="clock"></span>
       </div>
     </nav>
+
+    <section id="deck" hidden>
+      <header id="deck-bar">
+        <div id="deck-tabs" role="tablist"></div>
+        <div class="deck-tools">
+          <button id="deck-out" title="Back to all terminals (Esc, or Ctrl + scroll down)">⊖ All terminals</button>
+          <button id="deck-group" title="Put agents together in a group">+ Create group</button>
+        </div>
+      </header>
+      <div id="deck-grid">
+        <div class="deck-row groups" id="deck-groups"></div>
+        <div class="deck-row people" id="deck-people"></div>
+        <p id="deck-empty" class="hint" hidden>Nobody hired yet. Open Staff (top left) and hire someone.</p>
+      </div>
+    </section>
 
     <div id="windows">
       <section class="panel" id="panel-staff" hidden>

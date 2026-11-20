@@ -60,11 +60,23 @@ installed on this machine, using its existing login (no API key). Electron's mai
 runs one headless session per agent (`electron/agents.mjs`) and the office answers its
 permission prompts:
 
+- Agents get everything Claude Code has in a terminal: every built-in tool, every installed
+  skill, and the MCP servers set up on this machine (e.g. a Blender server). Only moving
+  between worktrees is left to the office.
 - While researching, agents may only read. Anything that would change a file is refused.
 - Approved work happens in a git worktree under `~/proiecte/.letting-go/worktrees/` on the
   agent's own branch, so your checkout is never touched. Agents commit there and never push.
   A project without git history gets edited in place, and every change asks first.
 - Commands that need permission show up in the *OKs* panel.
+- **Questions:** when something is your call, agents ask with multiple choice (Claude Code's
+  AskUserQuestion). It shows in their terminal: press a number, or type your own answer.
+- **Apps and the screen:** agents can start programs to test their work (the app they're
+  building, Blender, a browser) and look at the screen: the app runs a small screenshot
+  server on 127.0.0.1 (`electron/screen.mjs`), and each agent is told its address and key.
+- **Missing skills:** if a task needs a skill that isn't installed, the agent looks through the
+  plugin marketplaces and asks you to install it (it shows in the terminal and the OKs panel).
+  Say yes and the office installs the plugin and restarts the agent with it loaded, in the same
+  conversation.
 
 **Pictures:** paste (Ctrl+V) or drop pictures into an agent's message box, the "do this
 instead" box on a pitch, or a new team's task. They go to Claude along with your words.
@@ -78,13 +90,17 @@ numbers come live from Claude every minute, the same ones Claude Code's `/usage`
 using Claude Code's saved login (`electron/usage.mjs`).
 
 **Auto mode:** approved work runs in Claude Code's auto mode, so agents decide what's safe
-on their own and only genuinely risky actions ask. Switch to "ask me" in Settings.
+on their own and only genuinely risky actions ask. Switch to "ask me" in Settings, or to
+**Full access** (Claude Code's bypass permissions: nothing is checked or asked, deleting
+files included).
 
 **Closing with work in progress:** the app asks whether to let agents finish in the
-background. If yes, the window hides, each agent finishes only the job you already approved
-(on its own branch; anything needing approval is allowed inside its branch folder and
-refused elsewhere), nobody starts anything new, and the app quits by itself when everyone
-is done. Open the app again to bring the window back.
+background. If yes, the window hides, each agent finishes only the job you already approved,
+nobody starts anything new, and the app quits by itself when everyone is done. In auto mode
+or full access they carry on just as they would with you there; in "ask me" mode anything
+needing approval is allowed inside their branch folder and refused elsewhere. Questions and
+plugin installs can't wait for you, so they decide for themselves and say so in their
+summary. Open the app again to bring the window back.
 
 **Settings** (the gear on the right): your projects folder, your AI engines, which engine and model new
 hires use, approvals, and what closing does. An engine is any Claude Code-compatible command
@@ -109,16 +125,23 @@ type at the `❯` prompt (Enter sends, Shift+Enter for a new line, Esc interrupt
 earlier messages, Ctrl+V for pictures), and permission questions are answered right there
 with 1 or 2. `/help` lists the commands (`/clear`, `/stop`, `/hold`, `/reopen`, `/model`).
 Click a team's name in Staff (or its `>_ Team`) for the team's terminal: everyone's lines
-together, tagged by name. Messages go to the manager; start with `@Name` for one person or
-`@all` for everyone. Windows can be dragged, resized and minimized, and the history is kept
-between runs.
+together, tagged by name. A message there goes to the whole team and the manager decides
+what happens; start with `@Name` for one person. Teammates talk to each other too (a
+```` ```tell ```` block the office delivers), but the manager has the final say. Windows can be
+dragged, resized and minimized, and the history is kept between runs.
 
-**Skills** (the Skills button on an agent): tick which of the Claude Code skills installed on
-your machine that agent can use, or tick "Give new hires these skills too" to make them the
-default. Their skills show as tags on the agent's panel; click a tag's × to take one away.
-Each agent keeps their own skills between runs. Nobody has skills until you pick some. A
-change applies from their next job. An agent with skills also keeps any skills that belong
-to the project they're working in.
+**Terminal view** (the `>_` icon in the top bar, or **T**): the office as nothing but
+terminals. Group terminals across the top, everyone's own below. Click one to zoom in and
+work in it; Esc (with an empty prompt), the ⊖ button or Ctrl + scroll down zooms back out,
+Ctrl + scroll up over a terminal zooms into it. The tabs along the top jump straight to any
+terminal and flag the ones waiting on you; *Create group* puts agents together. The panels
+step aside while it's on (their icons still open them) and come back when you switch to the
+office. The app remembers which view you were in.
+
+**Skills:** every agent can use every skill installed on your machine, and picks what fits
+the task. The Skills button on an agent marks their go-to skills, which they reach for first
+(tick "Give new hires these skills too" to make them the default); they show as tags on the
+agent's panel. A change applies from their next job.
 
 In a plain browser (`npx vite`) the agents are simulated instead (`src/agents/sim.ts`).
 

@@ -1,11 +1,12 @@
 import { bus } from '../bus';
 import { DEFAULT_SETTINGS, engineIn, type AgentUsage, type Limits } from '../agents/crew';
-import type { AgentActivity, AgentStatus, Decision, Idea, Role, Settings, SkillInfo, Team, TermEntry } from '../agents/types';
+import type { AgentActivity, AgentStatus, Ask, Decision, Idea, Role, Settings, SkillInfo, Team, TermEntry } from '../agents/types';
 import { Lofi } from '../audio/lofi';
 import { OWNER } from '../owner';
 import { byId, el } from './dom';
 import { badge, initPanels, panels } from './panels';
 import { acceptPictures } from './paste';
+import { initDeck } from './deck';
 import { initTerminals } from './terminal';
 import { initWindows } from './windows';
 
@@ -34,7 +35,7 @@ export interface AgentView {
 let settings: Settings = DEFAULT_SETTINGS;
 bus.on('settings', (s: Settings) => (settings = s));
 
-export interface ApprovalView { id: string; name: string; detail: string }
+export interface ApprovalView { id: string; name: string; detail: string; ask?: Ask }
 
 export interface PitchView { id: string; name: string; avatar: string; idea: Idea }
 
@@ -384,6 +385,7 @@ function initTeams() {
   };
 
   byId('new-team').onclick = open;
+  bus.on('team:new', open);
   byId('team-close').onclick = () => (pop.hidden = true);
   bus.on('agents', (views: AgentView[]) => (agents = views));
   bus.on('teams', (list: Team[]) => (teams = list));
@@ -419,7 +421,7 @@ function pickSkills(a: AgentView) {
     search.placeholder = `Search ${skills.length} skills...`;
     const list = el('div', 'skills-list');
     const count = el('span', 'hint');
-    const showCount = () => (count.textContent = chosen.size ? `${chosen.size} picked` : 'None picked: no skills for them');
+    const showCount = () => (count.textContent = chosen.size ? `${chosen.size} picked` : 'None picked: they still use any skill that fits');
 
     const row = (s: SkillInfo) => {
       const label = el('label', 'skill');
@@ -559,6 +561,7 @@ export function initHud() {
   initUsage();
   initTeams();
   initTerminals();
+  initDeck();
   const list = byId('agent-list');
   const requests = byId('requests');
   const inspect = byId('inspect');
@@ -645,7 +648,16 @@ export function initHud() {
     requests.replaceChildren(
       ...approvals.map((p) => {
         const li = el('li');
-        li.append(el('b', undefined, `${p.name} wants to run`), el('code', undefined, p.detail.replace(/^\$ /, '')), decision(p.id));
+        if (p.ask?.kind === 'question') {
+          // questions get answered in their terminal, where the options are
+          const open = el('button', undefined, 'Answer in terminal');
+          open.onclick = () => bus.emit('term:open', p.id);
+          const row = el('div', 'buttons');
+          row.append(open);
+          li.append(el('b', undefined, `${p.name} has a question`), el('div', 'task', p.ask.questions.map((q) => q.question).join(' · ')), row);
+        } else if (p.ask?.kind === 'install') {
+          li.append(el('b', undefined, `${p.name} wants to install a plugin`), el('code', undefined, p.ask.plugin), ...(p.ask.why ? [el('div', 'task', p.ask.why)] : []), decision(p.id));
+        } else li.append(el('b', undefined, `${p.name} wants to run`), el('code', undefined, p.detail.replace(/^\$ /, '')), decision(p.id));
         return li;
       }),
     );
@@ -711,7 +723,7 @@ export function initHud() {
       controls.replaceWith(sure);
     };
     const skills = el('button');
-    skills.title = `Choose which skills ${a.name} can use`;
+    skills.title = `${a.name}'s go-to skills (they can use every installed skill)`;
     skills.hidden = !a.real;
     skills.onclick = () => {
       const now = agents.find((x) => x.id === a.id);
