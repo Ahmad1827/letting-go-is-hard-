@@ -864,7 +864,8 @@ export class RealCrew implements Crew {
           this.note(agentId, `Auto-approved: ${text}`);
         } else if (this.background) {
           // nobody to ask: fine inside their own branch folder, not anywhere else
-          const isolated = !!s.workCwd?.replace(/\\/g, '/').includes('/.letting-go/worktrees/');
+          // an MCP server reaches outside the branch folder (Blender, Drive...), so that waits for them too
+          const isolated = !mcpName(msg.tool) && !!s.workCwd?.replace(/\\/g, '/').includes('/.letting-go/worktrees/');
           this.bridge.answer(agentId, msg.requestId, isolated, msg.input, isolated ? undefined : `${OWNER} is away. Skip anything that needs approval and mention it in your summary.`);
           this.note(agentId, `${isolated ? 'Allowed (own branch, while away)' : 'Skipped (needs approval, Ahmad is away)'}: ${text}`);
         } else {
@@ -1118,7 +1119,13 @@ function describe(tool: string, input: Record<string, unknown>, root: string): [
     case 'WebSearch': return ['reading', `Search the web: ${input.query}`];
     case 'WebFetch': return ['reading', `Fetch ${input.url}`];
     case 'Skill': return ['reading', `Use the ${input.skill} skill`];
-    default: return ['thinking', tool];
+    case 'NotebookEdit': return ['writing', `Edit ${rel(input.notebook_path, root)}`];
+    case 'Agent': case 'Task': return ['thinking', `Hand off: ${short(String(input.description ?? ''), 60)}`];
+    case 'TodoWrite': return ['thinking', 'Update the to-do list'];
+    default: {
+      const m = mcpName(tool);
+      return m ? ['running', `${m.server}: ${m.tool}`] : ['thinking', tool];
+    }
   }
 }
 
@@ -1132,6 +1139,8 @@ function toolArg(tool: string, input: Record<string, unknown>, root: string) {
     case 'WebSearch': return String(input.query ?? '');
     case 'WebFetch': return String(input.url ?? '');
     case 'Skill': return String(input.skill ?? '');
+    case 'NotebookEdit': return rel(input.notebook_path, root);
+    case 'Agent': case 'Task': return String(input.description ?? '');
     default: return short(JSON.stringify(input), 120);
   }
 }
@@ -1151,5 +1160,14 @@ function permissionText(tool: string, input: Record<string, unknown>, root: stri
   if (tool === 'Bash') return `run: ${short(String(input.command ?? ''), 160)}`;
   if (tool === 'Edit' || tool === 'Write') return `${tool.toLowerCase()} ${rel(input.file_path, root)}`;
   if (tool === 'Skill') return `use the ${input.skill} skill`;
+  if (tool === 'NotebookEdit') return `edit ${rel(input.notebook_path, root)}`;
+  const m = mcpName(tool);
+  if (m) return `use ${m.server}: ${m.tool} ${short(JSON.stringify(input), 160)}`;
   return `use ${tool}`;
+}
+
+/** An MCP server's tool, mcp__blender__get_scene_info, as its server and tool names. */
+function mcpName(tool: string) {
+  const m = /^mcp__(.+?)__(.+)$/.exec(tool);
+  return m ? { server: m[1].replace(/^claude_ai_/, '').replace(/_/g, ' '), tool: m[2] } : null;
 }

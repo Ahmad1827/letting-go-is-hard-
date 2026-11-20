@@ -12,7 +12,13 @@ import readline from 'node:readline';
 import { engine, settings } from './settings.mjs';
 import { catalog, skillPrompt, skillSettings } from './skills.mjs';
 
-const TOOLS = 'Bash,Read,Glob,Grep,Edit,Write,WebSearch,WebFetch';
+/**
+ * Agents get every tool Claude Code has, plus the MCP servers set up on this
+ * machine (Blender and friends), except the ones that would take over what the
+ * office does itself: asking the owner multiple-choice questions and moving
+ * between worktrees. The Skill tool comes only with skills picked for them.
+ */
+const NOT_HERE = ['AskUserQuestion', 'EnterWorktree', 'ExitWorktree'];
 /** Approved work happens in git worktrees here, so a project's own checkout is never touched. */
 const worktrees = () => path.join(settings().projectsRoot, '.letting-go', 'worktrees');
 
@@ -121,6 +127,8 @@ function slim(m) {
     return d?.type === 'text_delta' && d.text && !m.parent_tool_use_id ? { kind: 'delta', text: d.text } : null;
   }
   if (m.type === 'system' && m.subtype === 'init') return { kind: 'init', model: m.model, cwd: m.cwd, session: m.session_id };
+  // a subagent's own turns stay inside it, the way Claude Code folds them away
+  if ((m.type === 'assistant' || m.type === 'user') && m.parent_tool_use_id) return null;
   if (m.type === 'assistant') {
     const parts = [];
     for (const c of m.message.content) {
@@ -166,7 +174,6 @@ export function setupAgents(ipcMain, getWindow) {
     const args = [
       '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
       '--permission-prompt-tool', 'stdio', '--permission-mode', mode || 'default',
-      '--strict-mcp-config',
     ];
     if (model) args.push('--model', model);
     // pick last time's conversation back up, so they remember what was said and done
@@ -181,7 +188,7 @@ export function setupAgents(ipcMain, getWindow) {
     const entry = { p: null, closed: false, pending: [] };
     procs.set(id, entry);
     send(id, prompt);
-    let tools = TOOLS;
+    let skillTool = false;
     let brief = system;
     if (skills?.length) {
       try {
@@ -191,7 +198,7 @@ export function setupAgents(ipcMain, getWindow) {
         const gone = skills.filter((s) => !all.includes(s));
         if (gone.length) emit(id, { kind: 'note', text: `Skills no longer installed: ${gone.join(', ')}` });
         if (picked.length) {
-          tools = `${TOOLS},Skill`;
+          skillTool = true;
           brief = `${system}\n\n${skillPrompt(picked)}`;
           args.push('--settings', JSON.stringify(skillSettings(all, picked)));
         }
@@ -201,7 +208,7 @@ export function setupAgents(ipcMain, getWindow) {
         emit(id, { kind: 'note', text: `Couldn't load their skills, working without them this time: ${e.message}` });
       }
     }
-    args.push('--tools', tools, '--append-system-prompt', brief);
+    args.push('--disallowedTools', [...NOT_HERE, ...(skillTool ? [] : ['Skill'])].join(','), '--append-system-prompt', brief);
     const launch = launchOf(eng);
     const p = spawn(launch.file, [...launch.pre, ...args], { cwd: dir, env: launch.env, windowsHide: true });
     entry.p = p;
