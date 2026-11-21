@@ -43,6 +43,10 @@ once their current job is done.
      without pitching again.
 4. **Work**: types at their desk, runs things at the mainframe, and asks before risky
    commands (the *OKs* panel), then drops the result in the mail room outbox.
+5. **Afterwards**: they still remember the job. Ask "are you finished?" or "what did you
+   change?" any time later and they answer from that job's own conversation (a manager can
+   even hand out more of it to the team). Ask for something new and they start on that instead.
+   A plain question to someone with nothing on just gets an answer, not a pitch.
 
 *Auto-approve (let go)* approves pitches and commands without asking.
 

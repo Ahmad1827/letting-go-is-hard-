@@ -35,6 +35,8 @@ export interface StaffSave {
   session?: { id: string; cwd: string } | null;
   /** On hold: what they were doing when the owner paused them. */
   held?: Phase | null;
+  /** The job they last finished and its conversation, to be asked about later. */
+  last?: unknown;
   /** What the owner asked of them, while they were still working out the job. */
   orders?: string | null;
   /** Messages that came in while on hold. */

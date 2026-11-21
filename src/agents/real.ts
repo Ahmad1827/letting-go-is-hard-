@@ -118,7 +118,16 @@ interface Staff {
   mail: string[];
   /** How their current session was started, to restart it (e.g. once a plugin is installed). */
   lastCfg: StartConfig | null;
+  /** The job they last finished, and its conversation, so they can still be asked about it afterwards. */
+  last: LastJob | null;
+  /** Answering the owner's message while free: no pitch is needed unless it's something to do. */
+  chatting?: boolean;
+  /** Answering the owner about that finished job, not doing a new one: what they asked. */
+  followUp: string | null;
 }
+
+/** A finished job: where it happened and the conversation that did it (plus the team's job, for a manager). */
+interface LastJob { idea: Idea; cwd: string; mode: string; session: { id: string; cwd: string } | null; team: string | null; job: TeamState['job'] }
 
 interface TeamState extends Team {
   /** The job: where it lives and the manager's branch the workers start from. */
@@ -135,6 +144,15 @@ const INSTALL = /```install\s*([\s\S]*?)```/g;
 const OFFICE_BLOCK = /```(?:pitch|assign|tell|install)/;
 const stripBlocks = (text: string) => text.replace(PITCH, '').replace(ASSIGN, '').replace(TELL, '').replace(INSTALL, '').trim();
 const TEAM_DONE = /^\s*TEAM DONE\s*$/m;
+/** A follow-up turned out to be a new job, not a question about the finished one. */
+const NEW_JOB = /^\s*NEW JOB\s*$/m;
+
+/** The owner's message to someone about the job they finished: answered in that job's own conversation. */
+const FOLLOW_UP = (text: string, idea: Idea) => `${text}
+
+(${OWNER} is talking to you about the job you finished here. For reference:
+${jobBrief(idea)}
+Answer from what you did, and only change things if ${OWNER} asks you to. If instead ${OWNER} wants something new in a different project, don't start on it: reply with one sentence and end with a line that says only: NEW JOB)`;
 
 const PITCH_FORMAT = `\`\`\`pitch
 {"project": "<sub-folder name, or a short new folder name for a new project>", "title": "<short title>", "summary": "<2-3 sentences: what and why>", "steps": ["<step>", "<step>", "<step>"]}
@@ -211,6 +229,11 @@ const RESUME_RESEARCH = `You were paused (the office closed, or ${OWNER} put you
 
 const LOOK_AROUND = 'Have a look around and pitch one idea.';
 
+/** The owner talking to someone with nothing on. */
+const CHAT = (text: string) => `${OWNER} says: ${text}
+
+(If that's a question or a chat, just answer it briefly, with no pitch block. If it's something for you to do, end with the pitch block for it.)`;
+
 const short = (s: string, n = 120) => (s.length > n ? `${s.slice(0, n - 3)}...` : s);
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24);
 
@@ -249,7 +272,7 @@ export class RealCrew implements Crew {
       pitched: false, orders: null, ordersPictures: [], team: null, role: null, assignment: null, desk: null,
       activity: 'idle', lastShown: 0, usage: { tokens: 0, cost: 0 }, sessionCost: 0,
       session: null, launchCwd: '', resumeNext: false, retry: null, held: null, inbox: [], live: '', turnTokens: 0, tools: new Map(),
-      mail: [], lastCfg: null,
+      mail: [], lastCfg: null, last: null, followUp: null,
     };
   }
 
@@ -262,7 +285,7 @@ export class RealCrew implements Crew {
         phase: s.pitched ? 'pitching' : s.phase,
         idea: noPictures(s.idea),
         work: s.workCwd ? { cwd: s.workCwd, mode: s.workMode } : null,
-        desk: s.desk, assignment: s.assignment, session: s.session, held: s.held, inbox: s.inbox, mail: s.mail, orders: s.orders,
+        desk: s.desk, assignment: s.assignment, session: s.session, held: s.held, inbox: s.inbox, mail: s.mail, orders: s.orders, last: s.last,
       })),
       teams: [...this.teams.values()].map(({ job, ...t }) => ({ ...t, job: job && { ...job, idea: noPictures(job.idea) } })),
     };
@@ -273,7 +296,7 @@ export class RealCrew implements Crew {
       this.staff.set(p.id, {
         ...this.fresh(p.name), engine: p.engine, model: p.model, skills: p.skills ?? [], ideas: p.ideas ?? false, usage: { ...p.usage }, seen: new Set(p.seen),
         idea: p.idea, workCwd: p.work?.cwd ?? null, workMode: p.work?.mode ?? 'default', desk: p.desk as WorkPlace | null, assignment: p.assignment,
-        session: p.session ?? null, resumeNext: !!p.session, held: p.held ?? null, inbox: p.inbox ?? [], mail: p.mail ?? [], orders: p.orders ?? null,
+        session: p.session ?? null, resumeNext: !!p.session, held: p.held ?? null, inbox: p.inbox ?? [], mail: p.mail ?? [], orders: p.orders ?? null, last: (p.last as LastJob | null) ?? null,
         ...(p.held ? { phase: 'held' as Phase } : {}),
       });
     }
@@ -511,11 +534,20 @@ export class RealCrew implements Crew {
       return;
     }
     this.note(agentId, `${OWNER}: ${text}${pictureNote(pictures)}`, { k: 'user', text, pics: pictures.length });
-    const message = content(text, pictures);
-    if (s.phase === 'break') {
+    let message = content(text, pictures);
+    if (s.phase === 'break' && s.alive) {
       // still chatting about the finished work: keep that session
       window.clearTimeout(s.breakTimer);
       this.setPhase(s, 'work');
+      s.followUp = text;
+      this.reopenJob(s);
+      if (s.idea) message = content(FOLLOW_UP(text, s.idea), pictures);
+    } else if (!s.alive && (s.phase === 'idle' || s.phase === 'break') && this.followUp(agentId, text, pictures)) return;
+    else if (!s.alive && s.phase === 'stopped' && s.idea && s.workCwd && s.role !== 'worker') {
+      // Claude Code stopped mid-job: pick the job back up, with this message first
+      s.mail.push(`${OWNER} says: ${text}`);
+      s.resumeNext = !!s.session;
+      return this.resume(agentId, 'stopped', 'Picking the job back up');
     }
     if (s.alive) this.bridge.send(agentId, message);
     else if (s.role === 'worker' && !s.desk) {
@@ -524,7 +556,62 @@ export class RealCrew implements Crew {
       this.note(agentId, `${s.name} takes tasks from ${this.nameOf(manager ?? '')}; passed it on`);
       if (manager) this.say(manager, `(for ${s.name}) ${text}`, pictures);
     } else if (s.role === 'worker' && s.desk) this.launch(agentId, { cwd: s.desk.cwd, system: this.workerSystem(s), prompt: message, mode: this.workMode(s.desk.mode) });
-    else this.research(agentId, `${OWNER} says: ${text}`, pictures);
+    else {
+      // a question or a chat gets an answer; only something to do becomes a pitch
+      s.chatting = true;
+      this.research(agentId, CHAT(text), pictures);
+    }
+  }
+
+  /** A manager talking about the team's finished job gets it back, so they can hand out more of it. */
+  private reopenJob(s: Staff) {
+    const team = this.teamOf(s);
+    if (team && s.role === 'manager' && !team.job && s.last?.job && s.last.team === team.id) team.job = s.last.job;
+  }
+
+  /** Free, and asked something: pick the finished job's conversation back up instead of starting from nothing. */
+  private followUp(agentId: string, text: string, pictures: Picture[]) {
+    const s = this.staff.get(agentId)!;
+    const last = s.last;
+    if (!last || s.role === 'worker') return false;
+    window.clearTimeout(s.breakTimer);
+    window.clearTimeout(s.restTimer);
+    s.resting = null;
+    this.setPhase(s, 'work');
+    s.followUp = text;
+    s.idea = last.idea;
+    s.workCwd = last.cwd;
+    s.workMode = last.mode;
+    s.session = last.session;
+    s.resumeNext = !!last.session && last.session.cwd === last.cwd;
+    this.reopenJob(s);
+    const team = this.teamOf(s);
+    const system = team?.job && s.role === 'manager' ? MANAGER_WORK_PROMPT(s.name, team.workers.map((w) => this.nameOf(w)), team.job.branch) : WORK_PROMPT(s.name, !last.idea.path);
+    this.emitNow(agentId, 'thinking', `About "${last.idea.title}"`);
+    this.launch(agentId, { cwd: last.cwd, system, prompt: content(FOLLOW_UP(text, last.idea), pictures), mode: this.workMode(last.mode) });
+    return true;
+  }
+
+  /** Done answering about the finished job: back to a break, and the countdown to a pitch starts again. */
+  private endFollowUp(agentId: string, s: Staff, text: string) {
+    const asked = s.followUp;
+    s.followUp = null;
+    // a resumed conversation can come back under a new id: keep the one to pick up next time
+    if (s.last && s.session?.cwd === s.last.cwd) s.last.session = s.session;
+    const team = this.teamOf(s);
+    if (team && s.role === 'manager') team.job = null;
+    if (NEW_JOB.test(text)) {
+      // something new after all: work out the job from what the owner said, and start on it
+      if (asked) {
+        this.reset(agentId);
+        s.orders = asked;
+        return this.research(agentId, ORDERS_PROMPT(asked, s.role === 'manager'));
+      }
+    }
+    this.setPhase(s, 'break');
+    this.emitNow(agentId, 'idle', 'Coffee break');
+    window.clearTimeout(s.breakTimer);
+    s.breakTimer = window.setTimeout(() => s.phase === 'break' && this.research(agentId), 15000);
   }
 
   setModel(agentId: string, model: string) {
@@ -844,6 +931,7 @@ export class RealCrew implements Crew {
     s.orders = null;
     s.ordersPictures = [];
     s.idea = null;
+    s.followUp = null;
     if (this.line.includes(agentId)) this.leaveLine(agentId);
   }
 
@@ -878,6 +966,7 @@ export class RealCrew implements Crew {
     s.nudged = false;
     s.pitched = false;
     s.permissions = [];
+    if (prompt === undefined || prompt === LOOK_AROUND || prompt === RESUME_RESEARCH || s.orders) s.chatting = false;
     const team = this.leads(s);
     const system = team ? MANAGER_RESEARCH_PROMPT(s.name, team.workers.map((w) => this.nameOf(w))) : RESEARCH_PROMPT(s.name);
     const avoid = s.seen.size ? ` Don't re-pitch these: ${[...s.seen].join('; ')}.` : '';
@@ -970,6 +1059,7 @@ export class RealCrew implements Crew {
 
   private startWork(agentId: string, idea: Idea) {
     const s = this.staff.get(agentId)!;
+    s.followUp = null;
     const team = this.leads(s);
     return team ? this.teamWork(team, idea) : this.soloWork(agentId, idea);
   }
@@ -1072,8 +1162,9 @@ export class RealCrew implements Crew {
       if (this.background) this.goHome(w);
       else this.standby(w);
     }
+    const job = team.job;
     team.job = null;
-    this.finishWork(team.manager, summary.replace(TEAM_DONE, '').trim());
+    this.finishWork(team.manager, summary.replace(TEAM_DONE, '').trim(), job);
   }
 
   private launch(agentId: string, cfg: StartConfig) {
@@ -1097,10 +1188,12 @@ export class RealCrew implements Crew {
     });
   }
 
-  private finishWork(agentId: string, summary: string) {
+  private finishWork(agentId: string, summary: string, job: TeamState['job'] = null) {
     const s = this.staff.get(agentId)!;
     this.setPhase(s, 'break');
     const idea = s.idea;
+    s.followUp = null;
+    if (idea) s.last = { idea: { ...idea, pictures: undefined }, cwd: s.launchCwd, mode: s.lastCfg?.mode ?? 'default', session: s.session, team: s.team, job };
     this.emitNow(agentId, 'done', idea?.path ? `${idea.branch} is ready for review` : `${idea?.project} is ready`);
     if (summary) this.note(agentId, `Summary: ${short(summary, 600)}`);
     if (this.background) {
@@ -1250,6 +1343,10 @@ export class RealCrew implements Crew {
         this.line.push(agentId);
         this.note(agentId, `Has an idea for ${s.idea.project}, waiting to see ${OWNER}`);
         this.refreshLine();
+      } else if (msg.ok && s.chatting) {
+        // answered the owner; back to waiting, and the countdown to a pitch starts again
+        s.chatting = false;
+        this.research(agentId);
       } else if (msg.ok && !s.nudged) {
         s.nudged = true;
         this.bridge.send(agentId, 'Please wrap up now and end with the ```pitch block.');
@@ -1261,6 +1358,14 @@ export class RealCrew implements Crew {
     }
     if (s.phase !== 'work') return;
     if (!msg.ok) return this.emitNow(agentId, 'idle', 'Stopped. Message them to continue.');
+    if (s.followUp && s.role !== 'worker') {
+      if (team && s.role === 'manager' && team.job) {
+        // handed out more of it: carry on as a team job until it's merged again
+        if (TEAM_DONE.test(msg.text)) return this.teamDone(team, msg.text);
+        if (team.workers.some((w) => this.staff.get(w)?.assignment)) return this.show(agentId, 'standby');
+      }
+      return this.endFollowUp(agentId, s, msg.text);
+    }
     if (team && s.role === 'worker') {
       // report back to the manager and wait for the next piece
       const done = s.assignment ?? 'their task';
