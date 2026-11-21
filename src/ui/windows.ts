@@ -164,6 +164,25 @@ function initSettings() {
     const pitchRow = el('label', 'check');
     pitchRow.append('Pitch only after ', pitchAfter, ' minutes with nothing to do');
 
+    // looking around for an idea runs on a cheap model; the approved work runs on their own
+    const pitchModel = el('select');
+    const seen = new Set<string>();
+    const own = el('option', undefined, 'Their own model');
+    own.value = '';
+    pitchModel.append(own);
+    for (const e of draft.engines)
+      for (const m of e.models)
+        if (m.id && !seen.has(m.id)) {
+          seen.add(m.id);
+          const o = el('option', undefined, m.label);
+          o.value = m.id;
+          pitchModel.append(o);
+        }
+    pitchModel.value = draft.pitchModel ?? '';
+    pitchModel.onchange = () => (draft.pitchModel = pitchModel.value);
+    const pitchModelRow = el('label', 'check');
+    pitchModelRow.append('Look for ideas with ', pitchModel);
+
     renderEngines();
     renderDefaults();
     const save = el('button', undefined, 'Save');
@@ -201,7 +220,9 @@ function initSettings() {
       el('p', 'hint', 'Applies straight away to the office, its panels and every terminal. Also: the theme button in the terminal view, or /theme in any terminal.'),
       el('h4', undefined, 'Pitches'),
       pitchRow,
-      el('p', 'hint', 'Agents with "Come up with ideas" ticked only go looking for an idea once you have left them with nothing to do this long. The pitch shows up in their terminal: 1 to approve, 2 to pass, or type what to do instead.'),
+      pitchModelRow,
+      el('p', 'hint', 'Agents with "Come up with ideas" ticked only go looking for an idea once you have left them with nothing to do this long, counted from when they last had something to do. The pitch shows up in their terminal: 1 to approve, 2 to pass, or type what to do instead.'),
+      el('p', 'hint', 'To keep pitches cheap, looking for an idea uses this model (when their engine has it), with no MCP servers, subagents or web searches, and a ready-made summary of your projects. Approved work always runs on their own model with everything.'),
       el('h4', undefined, 'Closing with work in progress'),
       radios('onclose', draft.onClose, [['ask', 'Ask me'], ['finish', 'Let them finish in the background'], ['stop', 'Stop them and close']], (v) => (draft.onClose = v)),
       buttons,

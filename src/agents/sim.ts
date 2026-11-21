@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 import { OWNER } from '../owner';
 import { DEFAULT_SETTINGS, teamId, type Crew, type CrewHooks, type CrewSave } from './crew';
 import { ideaFor, ordered } from './ideas';
-import type { AgentActivity, AgentStatus, Decision, Idea, Phase, Picture, ProjectInfo, Team } from './types';
+import type { AgentActivity, AgentStatus, Decision, Idea, Phase, Picture, ProjectInfo, Role, Team } from './types';
 
 /**
  * Fake agents: they produce the same AgentEvents a real agent run will, so the
@@ -172,7 +172,7 @@ export class Sim implements Crew {
   fire(agentId: string) {
     const run = this.runs.get(agentId);
     if (!run) return;
-    if (run.team) this.leaveTeam(agentId);
+    if (run.team) this.dropFromTeam(agentId);
     this.pushTeams();
     run.timer?.remove();
     if (this.line.includes(agentId)) {
@@ -253,7 +253,7 @@ export class Sim implements Crew {
     for (const id of members) {
       const run = this.runs.get(id);
       if (!run) return;
-      if (run.team) this.leaveTeam(id);
+      if (run.team) this.dropFromTeam(id);
       run.timer?.remove();
       if (this.line.includes(id)) {
         if (this.line[0] === id && run.pitched) this.hooks.pitch(null, null);
@@ -287,12 +287,66 @@ export class Sim implements Crew {
     this.pushTeams();
   }
 
-  private leaveTeam(id: string) {
+  private dropFromTeam(id: string) {
     const run = this.runs.get(id)!;
     const team = run.team!;
     if (team.manager === id) return this.disbandTeam(team.id);
     team.workers = team.workers.filter((w) => w !== id);
     run.team = null;
+  }
+
+  /** Off the line and the current step, ready for a new role. */
+  private pull(id: string) {
+    const run = this.runs.get(id)!;
+    run.timer?.remove();
+    if (this.line.includes(id)) {
+      if (this.line[0] === id && run.pitched) this.hooks.pitch(null, null);
+      this.line = this.line.filter((x) => x !== id);
+    }
+    run.pitched = false;
+    run.place = 0;
+  }
+
+  joinTeam(agentId: string, teamId: string, role: Role) {
+    const run = this.runs.get(agentId);
+    const team = this.teams.get(teamId);
+    if (!run || !team || (run.team === team && (team.manager === agentId) === (role === 'manager'))) return;
+    if (role === 'worker' && team.manager === agentId) return this.note(agentId, `Make someone else the manager of ${team.name} first`);
+    if (run.team && run.team !== team) this.dropFromTeam(agentId);
+    team.workers = team.workers.filter((w) => w !== agentId);
+    this.pull(agentId);
+    run.team = team;
+    if (role === 'manager') {
+      const old = team.manager;
+      team.manager = agentId;
+      if (old !== agentId && this.runs.has(old)) {
+        this.pull(old);
+        team.workers.push(old);
+        this.note(old, `${run.name} now manages ${team.name}`);
+        this.standby(old);
+      }
+      this.note(agentId, `${OWNER} made ${run.name} the manager of ${team.name}`);
+      this.research(agentId, undefined, true);
+    } else {
+      team.workers.push(agentId);
+      this.note(agentId, `Joined ${team.name} as a worker`);
+      this.standby(agentId);
+    }
+    this.refreshLine();
+    this.pushTeams();
+  }
+
+  leaveTeam(agentId: string) {
+    const run = this.runs.get(agentId);
+    if (!run?.team) return;
+    const team = run.team;
+    if (team.manager === agentId) return this.disbandTeam(team.id);
+    this.dropFromTeam(agentId);
+    this.pull(agentId);
+    this.note(agentId, `Off ${team.name}; back to working solo`);
+    this.research(agentId);
+    this.refreshLine();
+    this.pushTeams();
   }
 
   private pushTeams() {

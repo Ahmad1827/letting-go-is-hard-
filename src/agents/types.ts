@@ -119,6 +119,11 @@ export interface Settings {
   approvals: 'auto' | 'ask' | 'full';
   /** Minutes someone with nothing to do waits before going looking for an idea to pitch. */
   pitchAfterMin: number;
+  /**
+   * Model used while looking around for an idea to pitch, to keep that cheap ('' = their own model).
+   * Only used when their engine offers it; real work always runs on their own model.
+   */
+  pitchModel: string;
   /** On closing with work in progress. */
   onClose: 'ask' | 'finish' | 'stop';
 }

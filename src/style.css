@@ -359,6 +359,9 @@ body[data-term-theme='retro'] .x { color: #fff; }
 .role { font-size: 10px; padding: 0 5px; border: 1px solid var(--line-hi); text-transform: uppercase; letter-spacing: 0.5px; }
 .role.manager { background: var(--gold); color: var(--panel); border-color: var(--gold); }
 .role.worker { color: var(--dim); }
+select.role-pick { padding: 0 2px; border-width: 1px; cursor: pointer; max-width: 9.5em; }
+select.role-pick.solo { color: var(--dim); background: transparent; border-style: dashed; }
+select.role-pick option { text-transform: none; color: var(--ink); background: var(--well); }
 
 .requests li { flex-direction: column; align-items: stretch; gap: 5px; padding: 6px; border-bottom: 1px dashed var(--line); }
 .requests code { background: #000; color: #5f5; padding: 3px 5px; word-break: break-all; }

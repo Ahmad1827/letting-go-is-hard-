@@ -30,7 +30,8 @@ type Msg =
 /** A user message: plain text, or text with pictures. */
 type Content = string | ({ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } })[];
 
-interface StartConfig { cwd?: string; model?: string; engine?: string; system: string; prompt: Content; mode: string; resume?: string; skills?: string[] }
+/** `lean`: only looking around for an idea, so no MCP servers, subagents or web, and the short brief. */
+interface StartConfig { cwd?: string; model?: string; engine?: string; system: string; prompt: Content; mode: string; resume?: string; skills?: string[]; lean?: boolean }
 
 interface WorkRequest { project: string; projectPath: string | null; branch: string; isNew: boolean; base?: string; inPlace?: boolean }
 interface WorkPlace { cwd: string; path: string; mode: string; branch?: string; note: string }
@@ -90,6 +91,8 @@ interface Staff {
   breakTimer?: number;
   /** Free with nothing to do: when this goes off they go looking for an idea to pitch. */
   restTimer?: number;
+  /** Counting down to a pitch: 'always' for a manager whose team was made without a task. */
+  resting?: 'ideas' | 'always' | null;
   usage: AgentUsage;
   /** The running session's cost so far; Claude Code reports it cumulatively. */
   sessionCost: number;
@@ -139,9 +142,13 @@ const PITCH_FORMAT = `\`\`\`pitch
 
 const COMMIT_RULES = `commit with clear messages using the repository's configured git user, and never add Co-Authored-By lines or mention Claude or AI in commits; never push; commit only to your own branch: never merge into, reset, fast-forward or otherwise update any other branch (main and master included) or touch the project's own checkout, since ${OWNER} reviews and merges your branch`;
 
+/** Looking for an idea should cost little: the projects are already summed up for them. */
+const CHEAP = `Keep it quick and cheap: you're given a summary of every project, so pick from that instead of exploring, read at most five files of the one you pick, and don't run builds, tests or installs.`;
+
 const RESEARCH_PROMPT = (name: string) => `You are ${name}, a software engineer in ${OWNER}'s office. The current folder holds ${OWNER}'s projects, one per sub-folder (ignore hidden folders).
 Right now you are researching, not building: do not create, edit, move or delete anything, and only run read-only commands. Look around by reading files and with read-only commands (ls, grep, git log...).
-Pick a project, read enough of it to understand it (a handful of files is plenty), and come up with ONE concrete improvement you could build in an afternoon that ${OWNER} would actually want.
+Pick a project, read enough of it to understand it, and come up with ONE concrete improvement you could build in an afternoon that ${OWNER} would actually want.
+${CHEAP}
 End your reply with exactly one block like this:
 ${PITCH_FORMAT}
 ${OWNER} may also message you directly. Answer briefly and stay in character.`;
@@ -165,6 +172,7 @@ Only ask for one this task needs, and never for one that's already installed. If
 const MANAGER_RESEARCH_PROMPT = (name: string, workers: string[]) => `You are ${name}, a manager in ${OWNER}'s office leading a team: ${workers.join(', ')}. The current folder holds ${OWNER}'s projects, one per sub-folder (ignore hidden folders).
 Right now you are researching, not building: do not create, edit, move or delete anything, and only run read-only commands. Look around by reading files and with read-only commands (ls, grep, git log...).
 Pick a project, read enough to understand it, and come up with ONE improvement that ${OWNER} would want and that is big enough for your team of ${workers.length + 1}: it should split into independent pieces people can build in parallel in an afternoon.
+${CHEAP}
 End your reply with exactly one block like this:
 ${PITCH_FORMAT}
 ${OWNER} may also message you directly. Answer briefly and stay in character.`;
@@ -209,7 +217,16 @@ const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(
 export class RealCrew implements Crew {
   readonly real = true;
   autoApprove = false;
-  settings: Settings = DEFAULT_SETTINGS;
+  private current: Settings = DEFAULT_SETTINGS;
+  get settings() {
+    return this.current;
+  }
+  /** New settings; a changed wait restarts the countdown for anyone waiting to pitch. */
+  set settings(next: Settings) {
+    const was = this.current.pitchAfterMin;
+    this.current = next;
+    if (next.pitchAfterMin !== was) for (const [id, s] of this.staff) if (s.phase === 'idle' && s.resting && !s.held) this.rest(id, s.resting === 'always');
+  }
   /** The window is hidden: finish approved jobs, start nothing new. */
   private background = false;
   projects: ProjectInfo[] = [];
@@ -245,7 +262,7 @@ export class RealCrew implements Crew {
         phase: s.pitched ? 'pitching' : s.phase,
         idea: noPictures(s.idea),
         work: s.workCwd ? { cwd: s.workCwd, mode: s.workMode } : null,
-        desk: s.desk, assignment: s.assignment, session: s.session, held: s.held, inbox: s.inbox, mail: s.mail,
+        desk: s.desk, assignment: s.assignment, session: s.session, held: s.held, inbox: s.inbox, mail: s.mail, orders: s.orders,
       })),
       teams: [...this.teams.values()].map(({ job, ...t }) => ({ ...t, job: job && { ...job, idea: noPictures(job.idea) } })),
     };
@@ -256,7 +273,7 @@ export class RealCrew implements Crew {
       this.staff.set(p.id, {
         ...this.fresh(p.name), engine: p.engine, model: p.model, skills: p.skills ?? [], ideas: p.ideas ?? false, usage: { ...p.usage }, seen: new Set(p.seen),
         idea: p.idea, workCwd: p.work?.cwd ?? null, workMode: p.work?.mode ?? 'default', desk: p.desk as WorkPlace | null, assignment: p.assignment,
-        session: p.session ?? null, resumeNext: !!p.session, held: p.held ?? null, inbox: p.inbox ?? [], mail: p.mail ?? [],
+        session: p.session ?? null, resumeNext: !!p.session, held: p.held ?? null, inbox: p.inbox ?? [], mail: p.mail ?? [], orders: p.orders ?? null,
         ...(p.held ? { phase: 'held' as Phase } : {}),
       });
     }
@@ -290,6 +307,7 @@ export class RealCrew implements Crew {
     s.retry = null;
     window.clearTimeout(s.breakTimer);
     window.clearTimeout(s.restTimer);
+    s.resting = null;
     window.clearTimeout(s.showTimer);
     s.showTimer = undefined;
     s.permissions = [];
@@ -341,11 +359,11 @@ export class RealCrew implements Crew {
       }
       return;
     }
-    if ((phase === 'work' || phase === 'stopped') && s.idea && s.workCwd && (!team || team.job)) {
+    if ((phase === 'work' || phase === 'stopped') && s.idea && s.workCwd) {
       this.setPhase(s, 'work');
       this.note(agentId, `Picking "${s.idea.title}" back up`);
       this.emitNow(agentId, 'thinking', `Back on "${s.idea.title}"`);
-      const system = team ? MANAGER_WORK_PROMPT(s.name, team.workers.map((w) => this.nameOf(w)), team.job!.branch) : WORK_PROMPT(s.name, !s.idea.path);
+      const system = team?.job ? MANAGER_WORK_PROMPT(s.name, team.workers.map((w) => this.nameOf(w)), team.job.branch) : WORK_PROMPT(s.name, !s.idea.path);
       this.launch(agentId, { cwd: s.workCwd, system, prompt: `${jobBrief(s.idea)}\n\n${RESUME}`, mode: this.workMode(s.workMode) });
     } else if ((phase === 'queued' || phase === 'pitching') && s.idea) {
       // still has the idea: straight back in line
@@ -354,8 +372,8 @@ export class RealCrew implements Crew {
       this.line.push(agentId);
       this.note(agentId, `Still has the idea for ${s.idea.project}, waiting to see ${OWNER}`);
       this.refreshLine();
-    } else if (phase === 'research' && s.session?.cwd === '' && s.ideas) {
-      // same conversation, so they still know what they'd looked at
+    } else if (phase === 'research' && s.session?.cwd === '' && s.orders) {
+      // working out what the owner asked: same conversation, so they still know what they'd looked at
       this.research(agentId, RESUME_RESEARCH);
     } else {
       s.idea = null;
@@ -659,7 +677,8 @@ export class RealCrew implements Crew {
       this.note(id, `${team.name} was disbanded; back to working solo`);
       // anyone on hold stays put; reopening them starts them solo
       if (s.held) s.held = 'research';
-      else window.setTimeout(() => this.staff.has(id) && !this.staff.get(id)!.held && this.research(id), i * 1500);
+      // unless they've been put on another team in the meantime
+      else window.setTimeout(() => this.staff.get(id) === s && !s.held && !s.team && this.research(id), i * 1500);
     });
     this.pushTeams();
   }
@@ -736,8 +755,76 @@ export class RealCrew implements Crew {
     const team = s.team && this.teams.get(s.team);
     if (!team) return;
     if (team.manager === agentId) this.disbandTeam(team.id);
-    else team.workers = team.workers.filter((w) => w !== agentId);
+    else {
+      team.workers = team.workers.filter((w) => w !== agentId);
+      this.note(team.manager, `${s.name} left ${team.name}`);
+      if (team.job && s.assignment) this.deliverOffice(team.manager, `${s.name} was taken off your team by ${OWNER}. If their part isn't merged yet, hand it to someone else or do it yourself.`);
+    }
     s.team = s.role = null;
+  }
+
+  /** A message from the office: straight in if they're running, otherwise with their next prompt. */
+  private deliverOffice(toId: string, text: string) {
+    const s = this.staff.get(toId);
+    if (!s) return;
+    if (s.held) s.inbox.push(text);
+    else if (s.alive) this.bridge.send(toId, text);
+    else s.mail.push(text);
+  }
+
+  joinTeam(agentId: string, teamId: string, role: Role) {
+    const s = this.staff.get(agentId);
+    const team = this.teams.get(teamId);
+    if (!s || !team || (s.team === teamId && s.role === role)) return;
+    if (role === 'worker' && team.manager === agentId) {
+      this.note(agentId, `Make someone else the manager of ${team.name} first`);
+      return;
+    }
+    if (role === 'manager' && team.job && team.manager !== agentId) {
+      this.note(agentId, `${team.name} is in the middle of "${team.job.idea.title}", so its manager stays ${this.nameOf(team.manager)} until that's done (or disband it)`);
+      return;
+    }
+    if (s.team !== teamId) this.removeFromTeam(agentId);
+    else team.workers = team.workers.filter((w) => w !== agentId);
+    this.reset(agentId);
+    s.team = teamId;
+    s.role = role;
+    if (role === 'manager') {
+      const old = this.staff.get(team.manager);
+      const oldId = team.manager;
+      team.manager = agentId;
+      if (old && oldId !== agentId) {
+        // the old manager stays on as a worker
+        this.reset(oldId);
+        old.role = 'worker';
+        team.workers.push(oldId);
+        this.note(oldId, `${s.name} now manages ${team.name}; ${old.name} is a worker`);
+        this.standby(oldId);
+      }
+      this.note(agentId, `${OWNER} made ${s.name} the manager of ${team.name}`);
+      if (team.workers.length) for (const w of team.workers) if (w !== oldId) this.note(w, `${s.name} now manages ${team.name}`);
+      this.rest(agentId, true);
+    } else {
+      team.workers.push(agentId);
+      this.note(agentId, `Joined ${team.name} as a worker under ${this.nameOf(team.manager)}`);
+      this.standby(agentId);
+      if (team.job) this.deliverOffice(team.manager, `${s.name} just joined your team as a worker. Hand them a piece with an assign block if there's something for them.`);
+      else this.note(team.manager, `${s.name} joined ${team.name}`);
+    }
+    this.pushTeams();
+  }
+
+  leaveTeam(agentId: string) {
+    const s = this.staff.get(agentId);
+    const team = s && this.teamOf(s);
+    if (!s || !team) return;
+    if (team.manager === agentId) return this.disbandTeam(team.id);
+    this.removeFromTeam(agentId);
+    this.reset(agentId);
+    this.note(agentId, `${OWNER} took ${s.name} off ${team.name}; back to working solo`);
+    if (s.held) s.held = 'research';
+    else this.research(agentId);
+    this.pushTeams();
   }
 
   /** Drop whatever they were doing: session, line, pending prompts, timers. */
@@ -747,6 +834,7 @@ export class RealCrew implements Crew {
     s.alive = false;
     window.clearTimeout(s.breakTimer);
     window.clearTimeout(s.restTimer);
+    s.resting = null;
     window.clearTimeout(s.showTimer);
     s.showTimer = undefined;
     s.permissions = [];
@@ -784,17 +872,43 @@ export class RealCrew implements Crew {
       if (!now) return this.rest(agentId);
     }
     window.clearTimeout(s.restTimer);
+    s.resting = null;
     this.setPhase(s, 'research');
     s.idea = null;
     s.nudged = false;
     s.pitched = false;
     s.permissions = [];
-    const team = this.teamOf(s);
+    const team = this.leads(s);
     const system = team ? MANAGER_RESEARCH_PROMPT(s.name, team.workers.map((w) => this.nameOf(w))) : RESEARCH_PROMPT(s.name);
     const avoid = s.seen.size ? ` Don't re-pitch these: ${[...s.seen].join('; ')}.` : '';
-    this.launch(agentId, { model: s.model || undefined, system, prompt: content((prompt ?? LOOK_AROUND) + avoid, pictures), mode: 'default' });
+    // just looking for an idea of their own (nothing the owner asked): the cheap model and a lean session
+    const looking = !s.orders && (prompt === undefined || prompt === LOOK_AROUND || prompt === RESUME_RESEARCH);
+    const text = (prompt ?? LOOK_AROUND) + avoid + (looking && prompt !== RESUME_RESEARCH ? this.projectsBrief() : '');
+    this.launch(agentId, { model: looking ? this.pitchModel(s) : s.model || undefined, system, prompt: content(text, pictures), mode: 'default', lean: looking });
     this.note(agentId, s.orders ? 'Working out what that means' : 'Looking through the projects for something to improve');
     this.emitNow(agentId, 'thinking');
+  }
+
+  /** The projects summed up, so looking for an idea doesn't start with exploring every folder. */
+  private projectsBrief() {
+    if (!this.projects.length) return '';
+    const rows = this.projects.slice(0, 40).map((p) => {
+      const bits = [p.languages.join('/') || 'no code yet', `${p.files} files`, p.hasTests ? 'has tests' : 'no tests', ...(p.lastCommit ? [`last commit "${short(p.lastCommit, 60)}"`] : [])];
+      return `- ${p.name}: ${bits.join(', ')}${p.readme ? `. ${short(p.readme, 100)}` : ''}`;
+    });
+    return `\n\nThe projects, already summed up for you:\n${rows.join('\n')}`;
+  }
+
+  /** The model for looking around for ideas: the cheap one from Settings when their engine has it. */
+  private pitchModel(s: Staff) {
+    const m = this.settings.pitchModel;
+    return m && engineIn(this.settings, s.engine).models.some((x) => x.id === m) ? m : s.model || undefined;
+  }
+
+  /** Their team, when they manage one that has workers; a manager on their own works like anyone solo. */
+  private leads(s: Staff) {
+    const team = this.teamOf(s);
+    return team && s.role === 'manager' && team.workers.length ? team : null;
   }
 
   /** Nothing to do: sit at the desk until told what to do. */
@@ -806,6 +920,7 @@ export class RealCrew implements Crew {
     }
     window.clearTimeout(s.breakTimer);
     window.clearTimeout(s.restTimer);
+    s.resting = null;
     if (this.line.includes(agentId)) this.leaveLine(agentId);
     s.idea = null;
     s.pitched = false;
@@ -825,8 +940,9 @@ export class RealCrew implements Crew {
     const s = this.staff.get(agentId)!;
     const mins = Math.max(0, Number(this.settings.pitchAfterMin ?? 5) || 0);
     this.idle(agentId, `Free. Pitches an idea if nothing comes in for ${mins} min.`);
-    // already sitting idle (e.g. the box was just ticked): that time counts
-    const wait = Math.max(0, s.since + mins * 60_000 - Date.now());
+    // the clock starts now: a pitch only ever comes after a full stretch with nothing to do
+    const wait = mins * 60_000;
+    s.resting = always ? 'always' : 'ideas';
     s.restTimer = window.setTimeout(() => {
       if (this.staff.get(agentId) !== s || s.phase !== 'idle' || s.held || !(s.ideas || always)) return;
       this.research(agentId, always && !s.ideas ? LOOK_AROUND : undefined, [], true);
@@ -854,8 +970,8 @@ export class RealCrew implements Crew {
 
   private startWork(agentId: string, idea: Idea) {
     const s = this.staff.get(agentId)!;
-    const team = this.teamOf(s);
-    return team && s.role === 'manager' ? this.teamWork(team, idea) : this.soloWork(agentId, idea);
+    const team = this.leads(s);
+    return team ? this.teamWork(team, idea) : this.soloWork(agentId, idea);
   }
 
   private async soloWork(agentId: string, idea: Idea) {
@@ -974,7 +1090,7 @@ export class RealCrew implements Crew {
     // whatever teammates said while they weren't running comes first
     const mail = s.mail.splice(0);
     const prompt = mail.length ? withText(cfg.prompt, `Messages that came in for you:\n${mail.map((m) => `- ${m}`).join('\n')}`) : cfg.prompt;
-    const system = `${cfg.system}\n\n${POWERS}`;
+    const system = cfg.lean ? cfg.system : `${cfg.system}\n\n${POWERS}`;
     this.bridge.start(agentId, { ...cfg, system, prompt, resume, engine: s.engine, model: cfg.model ?? (s.model || undefined), skills: s.skills }).catch((e: Error) => {
       s.alive = false;
       this.note(agentId, `Couldn't start Claude Code: ${e.message}`);

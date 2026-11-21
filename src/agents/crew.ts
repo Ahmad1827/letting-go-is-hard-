@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentStatus, Decision, Idea, Phase, Picture, ProjectInfo, Settings, Team, TermLine } from './types';
+import type { AgentEvent, AgentStatus, Decision, Idea, Phase, Picture, ProjectInfo, Role, Settings, Team, TermLine } from './types';
 
 /** One of the plan's usage windows, as Claude Code reports it. */
 export interface UsageWindow { utilization: number; resetsAt: number }
@@ -35,6 +35,8 @@ export interface StaffSave {
   session?: { id: string; cwd: string } | null;
   /** On hold: what they were doing when the owner paused them. */
   held?: Phase | null;
+  /** What the owner asked of them, while they were still working out the job. */
+  orders?: string | null;
   /** Messages that came in while on hold. */
   inbox?: string[];
   /** Teammates' messages waiting for their next session. */
@@ -119,6 +121,10 @@ export interface Crew {
   createTeam(team: Omit<Team, 'id'>, pictures?: Picture[]): void;
   /** Everyone goes back to working on their own. */
   disbandTeam(teamId: string): void;
+  /** Put someone on a team: as a worker, or as its manager (the old manager becomes a worker). */
+  joinTeam(agentId: string, teamId: string, role: Role): void;
+  /** Back to working on their own. A manager leaving breaks the team up. */
+  leaveTeam(agentId: string): void;
   /** A message from the owner to everyone on a team; the manager decides what happens next. */
   sayTeam(teamId: string, text: string, pictures?: Picture[]): void;
 }
@@ -145,6 +151,7 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultSkills: [],
   approvals: 'auto',
   pitchAfterMin: 5,
+  pitchModel: 'claude-haiku-5-5',
   onClose: 'ask',
 };
 

@@ -9,7 +9,7 @@ import { Agent } from '../agents/Agent';
 import { DEFAULT_SETTINGS, type Crew, type CrewHooks, type CrewSave } from '../agents/crew';
 import { RealCrew, type AgentBridge } from '../agents/real';
 import { Sim } from '../agents/sim';
-import type { AgentEvent, Ask, Decision, Idea, Picture, ProjectInfo, Settings, Team, TermEntry, TermLine } from '../agents/types';
+import type { AgentEvent, Ask, Decision, Idea, Picture, ProjectInfo, Role, Settings, Team, TermEntry, TermLine } from '../agents/types';
 import type { AgentView, ApprovalView, PitchView } from '../ui/hud';
 import {
   BAND_ROWS, BOSS_MONITOR, COLS, ELEVATORS, HEIGHT, OUTBOX, ROWS, TILE, WIDTH, desks, props, rooms, spots, walls,
@@ -272,6 +272,8 @@ export class OfficeScene extends Phaser.Scene {
     bus.on('app:close', () => this.office()?.app?.close());
     bus.on('team:create', ({ pictures, ...t }: Omit<Team, 'id'> & { pictures?: Picture[] }) => this.crew.createTeam(t, pictures));
     bus.on('team:disband', (id: string) => this.crew.disbandTeam(id));
+    bus.on('team:join', ({ id, team, role }: { id: string; team: string; role: Role }) => this.crew.joinTeam(id, team, role));
+    bus.on('team:leave', (id: string) => this.crew.leaveTeam(id));
     bus.on('autoapprove', (on: boolean) => {
       this.crew.autoApprove = on;
       // commands get approved; questions and plugin installs still wait for a real answer

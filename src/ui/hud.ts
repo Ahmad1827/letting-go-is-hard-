@@ -1,5 +1,6 @@
 import { bus } from '../bus';
 import { DEFAULT_SETTINGS, engineIn, type AgentUsage, type Limits } from '../agents/crew';
+import { nextTeamName } from '../agents/roles';
 import type { AgentActivity, AgentStatus, Ask, Decision, Idea, Role, Settings, SkillInfo, Team, TermEntry } from '../agents/types';
 import { Lofi } from '../audio/lofi';
 import { OWNER } from '../owner';
@@ -321,14 +322,13 @@ function initTeams() {
   const body = byId('team-body');
   let agents: AgentView[] = [];
   let teams: Team[] = [];
-  let count = 0;
 
   const open = () => {
     const taken = new Set(teams.flatMap((t) => [t.manager, ...t.workers]));
     const free = agents.filter((a) => !taken.has(a.id));
     const form = el('form', 'team-form');
     const name = el('input');
-    name.value = `Team ${['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot'][count % 6]}`;
+    name.value = nextTeamName(teams);
     const table = el('table', 'usage-table');
     const roles = new Map<string, HTMLSelectElement>();
     for (const a of free) {
@@ -364,19 +364,18 @@ function initTeams() {
       const picked = [...roles].filter(([, s]) => s.value);
       const manager = picked.find(([, s]) => s.value === 'manager')?.[0];
       const workers = picked.filter(([, s]) => s.value === 'worker').map(([id]) => id);
-      if (!manager || !workers.length) {
-        error.textContent = 'Pick one manager and at least one worker.';
+      if (!manager) {
+        error.textContent = 'Pick a manager (workers can join later).';
         return;
       }
       const pictures = pics.take();
       bus.emit('team:create', { name: name.value.trim() || 'Team', manager, workers, task: task.value.trim() || (pictures.length ? 'Build what the pictures show.' : undefined), pictures });
-      count++;
       pop.hidden = true;
     };
     const buttons = el('div', 'buttons');
     buttons.append(create, cancel);
-    if (free.length < 2) {
-      body.replaceChildren(el('p', 'hint', 'Hire at least two people who aren’t on a team yet.'), cancel);
+    if (!free.length) {
+      body.replaceChildren(el('p', 'hint', 'Everyone is on a team already. Change roles from the Staff list, or say it in a terminal.'), cancel);
     } else {
       form.append(el('label', undefined, 'Name'), name, el('label', undefined, 'Who does what'), table, el('label', undefined, 'Task'), task, pics.strip, error, buttons);
       body.replaceChildren(form);
@@ -591,14 +590,39 @@ export function initHud() {
     if (role) li.classList.add('member');
     const dot = el('span', 'dot');
     dot.style.background = DOT[a.activity];
-    li.append(dot, el('b', undefined, a.name));
-    if (role) li.append(el('span', `role ${role}`, role === 'manager' ? 'Manager' : 'Worker'));
-    li.append(el('span', 'status', labelOf(a)), termButton('term:open', a.id, `Open ${a.name}'s terminal`));
+    li.append(dot, el('b', undefined, a.name), rolePick(a, role), el('span', 'status', labelOf(a)), termButton('term:open', a.id, `Open ${a.name}'s terminal`));
     li.onclick = () => {
       bus.emit('select', a.id);
       bus.emit('focus', a.id);
     };
     return li;
+  };
+
+  /** Solo, manager or worker of any team, in one click. */
+  const rolePick = (a: AgentView, role?: Role) => {
+    const sel = el('select', `role-pick role ${role ?? 'solo'}`);
+    sel.title = `${a.name}'s role. You can also say it in a terminal: "${a.name} you're the manager, ..."`;
+    const add = (value: string, label: string) => {
+      const o = el('option', undefined, label);
+      o.value = value;
+      sel.append(o);
+    };
+    add('solo', 'Solo');
+    for (const t of teams) {
+      add(`manager:${t.id}`, `Manager · ${t.name}`);
+      add(`worker:${t.id}`, `Worker · ${t.name}`);
+    }
+    add('manager:new', 'Manager · new team');
+    const mine = teams.find((t) => t.manager === a.id || t.workers.includes(a.id));
+    sel.value = mine ? `${role}:${mine.id}` : 'solo';
+    sel.onclick = (e) => e.stopPropagation();
+    sel.onchange = () => {
+      const [r, team] = sel.value.split(':') as [Role | 'solo', string];
+      if (r === 'solo') bus.emit('team:leave', a.id);
+      else if (team === 'new') bus.emit('team:create', { name: nextTeamName(teams), manager: a.id, workers: [] });
+      else bus.emit('team:join', { id: a.id, team, role: r });
+    };
+    return sel;
   };
 
   const renderList = () => {

@@ -23,7 +23,12 @@ New hires sit **idle** until you give them something to do: message them, or tic
 **Come up with ideas** in their panel (or type `/ideas on` in their terminal). Ticked,
 they loop through the cycle below on their own, but only once you've left them with nothing
 to do for 5 minutes (change it under *Settings → Pitches*); a message from you in that time
-puts them to work on that instead. Unticked, they stop looking for ideas and go back to idle
+puts them to work on that instead.
+
+Looking for an idea is kept cheap: it runs on Haiku by default (*Settings → Pitches*), in a
+lean session with no MCP servers, subagents or web searches, and the agent is handed a summary
+of every project so it reads a few files instead of exploring. Approved work runs on the
+agent's own model with everything. Unticked, they stop looking for ideas and go back to idle
 once their current job is done.
 
 1. **Research**: looks through the folders in `~/proiecte` (in the conference room and the archive).
@@ -55,6 +60,17 @@ the manager researches and pitches an idea big enough for the team. Once the wor
   *Come up with ideas* box is ticked, or waits idle if not.
 
 *Disband* sends everyone back to working on their own.
+
+Roles are quick to change:
+
+- **Staff list:** each person has a role picker: *Solo*, *Manager* or *Worker* of any team,
+  or *Manager · new team*.
+- **Any terminal:** just say it, e.g. `Dana you're the manager, Bob and Sam are workers`,
+  `make Kim a worker`, `Lee is on his own now`, or `Dana manager, the rest workers`. In
+  someone's own terminal `you` means them (`u are manager`). Or use `/role Dana manager`,
+  and `/teams` to see who's where. A new manager takes over their team and the old one stays
+  on as a worker; a manager going solo breaks the team up. Anything that isn't only about
+  roles is sent to the agent as a normal message.
 
 In the desktop app every employee is a real **Claude Code** session: the `claude` CLI
 installed on this machine, using its existing login (no API key). Electron's main process

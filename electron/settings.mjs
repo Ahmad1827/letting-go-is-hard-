@@ -36,6 +36,8 @@ const DEFAULTS = {
   approvals: 'auto',
   /** Minutes with nothing to do before someone goes looking for an idea to pitch. */
   pitchAfterMin: 5,
+  /** Model for looking around for ideas, to keep pitching cheap ('' = their own model). */
+  pitchModel: 'claude-haiku-5-5',
   /** On closing with work in progress: 'ask', 'finish' in the background, or 'stop'. */
   onClose: 'ask',
 };

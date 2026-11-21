@@ -1,6 +1,7 @@
 import { bus } from '../bus';
 import { DEFAULT_SETTINGS, engineIn, modelLabel } from '../agents/crew';
 import type { AgentActivity, Idea, Picture, Question, Settings, Team, TermEntry } from '../agents/types';
+import { applyRoleOps, parseRoles, planRoles } from '../agents/roles';
 import { el } from './dom';
 import { LABEL, labelOf, type AgentView, type ApprovalView } from './hud';
 import { raise } from './panels';
@@ -751,6 +752,8 @@ class Term {
       // @name /model ...: a command for that one person
       if (target && text.startsWith('/')) return this.command(text, [target]);
     }
+    // "Dana you're the manager, Bob is a worker": the office sorts the teams out, nobody is messaged
+    if (!this.pics.count && this.roles(text, this.teamId ? target : ids[0])) return;
     const pictures = this.pics.take();
     if (!text && !pictures.length) return;
     text ||= 'Have a look at this picture.';
@@ -760,6 +763,19 @@ class Term {
     // no @: the whole team hears it, and the manager decides what happens
     if (target) bus.emit('agent:say', { id: target, text, pictures });
     else bus.emit('team:say', { id: this.teamId, text, pictures });
+  }
+
+  /** Role changes said in words: made, with a line each, and true; false if the text isn't about roles. */
+  private roles(text: string, self: string | null) {
+    const wishes = parseRoles(text, agents.map((a) => ({ id: a.id, name: a.name })), self);
+    if (!wishes?.length) return false;
+    const plan = planRoles(wishes, teams, this.teamId, (id) => viewOf(id)?.name ?? id);
+    if ('error' in plan) this.print(plan.error);
+    else {
+      applyRoleOps(plan.ops);
+      plan.lines.forEach((l) => this.print(l));
+    }
+    return true;
   }
 
   /** Lines with a name in front, one per person: what a command says about each of them. */
@@ -804,6 +820,8 @@ class Term {
           '/engine [name]   show or switch the engine',
           '/stop            interrupt what they are doing',
           '/hold, /reopen   put on hold, bring back',
+          `/role [who] manager|worker|solo  e.g. /role ${this.teamId ? 'Dana manager' : 'worker'}, or just say "Dana you're the manager, Bob and Sam are workers"`,
+          '/teams           who is on which team',
           `/ideas on|off    ${this.teamId ? 'the manager pitches' : 'they pitch'} an idea after ${pitchMins} min with nothing to do`,
           '/approve, /pass  answer a pitch waiting here',
           '/theme [normal|night|light]  change how every terminal looks',
@@ -889,6 +907,20 @@ class Term {
         const theme = next ?? THEMES[(THEMES.indexOf(savedTheme()) + 1) % THEMES.length];
         bus.emit('theme', theme);
         return this.print(`Theme: ${theme}`);
+      }
+      case 'role':
+      case 'roles':
+      case 'teams': {
+        const self = only?.[0] ?? (this.teamId ? null : ids[0]);
+        if (arg && cmd.toLowerCase() !== 'teams') {
+          if (this.roles(arg, self) || (self && this.roles(`you are ${arg}`, self))) return;
+          return this.print(`Didn't follow that. Try /role ${self ? 'manager, /role worker or /role solo' : 'Dana manager, Bob worker'}.`);
+        }
+        if (!teams.length) this.print('No teams yet. Say e.g. "Dana you\'re the manager, Bob is a worker".');
+        for (const t of teams) this.print(`${t.name}: ${viewOf(t.manager)?.name ?? '?'} (manager)${t.workers.length ? `, ${t.workers.map((w) => viewOf(w)?.name ?? '?').join(', ')}` : ', no workers yet'}`);
+        const free = agents.filter((a) => !teams.some((t) => t.manager === a.id || t.workers.includes(a.id)));
+        if (free.length && teams.length) this.print(`On their own: ${free.map((a) => a.name).join(', ')}`);
+        return;
       }
       case 'approve':
       case 'pass':

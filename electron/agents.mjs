@@ -19,6 +19,8 @@ import { catalog, forget, skillPrompt } from './skills.mjs';
  * worktrees, which the office does itself.
  */
 const NOT_HERE = ['EnterWorktree', 'ExitWorktree'];
+/** Left out while someone is only looking around for an idea: the costly ways to look. */
+const LEAN_OFF = ['Agent', 'Task', 'WebSearch', 'WebFetch'];
 /** Approved work happens in git worktrees here, so a project's own checkout is never touched. */
 const worktrees = () => path.join(settings().projectsRoot, '.letting-go', 'worktrees');
 
@@ -168,7 +170,7 @@ export function setupAgents(ipcMain, getWindow) {
   }
 
   /** (Re)start an agent's Claude Code session. */
-  async function start(id, { cwd, model, system, prompt, mode, engine: engineId, resume, skills }) {
+  async function start(id, { cwd, model, system, prompt, mode, engine: engineId, resume, skills, lean }) {
     const eng = engine(engineId);
     stop(id);
     const args = [
@@ -189,8 +191,10 @@ export function setupAgents(ipcMain, getWindow) {
     procs.set(id, entry);
     send(id, prompt);
     // every skill is theirs; the ones picked for them are named as their go-to ones
-    const brief = [system, skills?.length ? skillPrompt(skills) : '', screenBrief()].filter(Boolean).join('\n\n');
-    args.push('--disallowedTools', NOT_HERE.join(','), '--append-system-prompt', brief);
+    // lean (looking around for an idea): no MCP servers, subagents or web, so a pitch stays cheap
+    const brief = lean ? system : [system, skills?.length ? skillPrompt(skills) : '', screenBrief()].filter(Boolean).join('\n\n');
+    if (lean) args.push('--strict-mcp-config');
+    args.push('--disallowedTools', [...NOT_HERE, ...(lean ? LEAN_OFF : [])].join(','), '--append-system-prompt', brief);
     const launch = launchOf(eng);
     const p = spawn(launch.file, [...launch.pre, ...args], { cwd: dir, env: launch.env, windowsHide: true });
     entry.p = p;
