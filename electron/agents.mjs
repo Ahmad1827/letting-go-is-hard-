@@ -26,6 +26,12 @@ const worktrees = () => path.join(settings().projectsRoot, '.letting-go', 'workt
 
 const procs = new Map();
 
+/** Of a NUL-separated list of repo paths, the ones Windows can't create. */
+function unwritable(list) {
+  const reserved = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+  return list.split('\0').filter((f) => f && f.split('/').some((part) => /[<>:"|?*\x00-\x1f]/.test(part) || /[. ]$/.test(part) || reserved.test(part)));
+}
+
 // Windows git refuses repos it doesn't own, like ones inside WSL (\\wsl.localhost\...)
 const GIT_ENV = process.platform === 'win32' ? { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'safe.directory', GIT_CONFIG_VALUE_0: '*' } : {};
 
@@ -297,8 +303,25 @@ export function setupAgents(ipcMain, getWindow) {
     for (let i = 2; await git(projectPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`]).then(() => true, () => false); i++) name = `${branch}-${i}`;
     const dir = path.join(worktrees(), `${project}--${name.replace(/[^\w.-]+/g, '-')}`);
     await fs.mkdir(worktrees(), { recursive: true });
-    await git(projectPath, ['worktree', 'add', '-q', '-b', name, dir, ...(base ? [base] : [])]);
-    return { cwd: dir, path: projectPath, mode: 'acceptEdits', branch: name, note: `Working in ${dir} on branch ${name}` };
+    const start = base ? [base] : [];
+    // files Windows can't have (a ':' in the name, say) would make the checkout fail: leave just those out
+    const skip = process.platform === 'win32' ? unwritable(await git(projectPath, ['ls-tree', '-r', '-z', '--name-only', base || 'HEAD'])) : [];
+    try {
+      if (!skip.length) await git(projectPath, ['worktree', 'add', '-q', '-b', name, dir, ...start]);
+      else {
+        await git(projectPath, ['worktree', 'add', '-q', '--no-checkout', '-b', name, dir, ...start]);
+        // sparse checkout: they stay in git and in every commit, they just aren't written to disk
+        await git(dir, ['sparse-checkout', 'set', '--no-cone', '/*', ...skip.map((f) => `!/${f.replace(/[\\*?[\]!#]/g, '\\$&')}`)]);
+        await git(dir, ['checkout', '-q']);
+      }
+    } catch (e) {
+      // don't leave a half-made worktree and branch behind
+      await git(projectPath, ['worktree', 'remove', '--force', dir]).catch(() => {});
+      await git(projectPath, ['branch', '-D', name]).catch(() => {});
+      throw e;
+    }
+    const left = skip.length ? ` (left out ${skip.length} file${skip.length > 1 ? 's' : ''} Windows can't have: ${skip.slice(0, 3).join(', ')}${skip.length > 3 ? '...' : ''})` : '';
+    return { cwd: dir, path: projectPath, mode: 'acceptEdits', branch: name, note: `Working in ${dir} on branch ${name}${left}` };
   }
 
   ipcMain.handle('agent:start', (_e, id, cfg) => start(id, cfg));

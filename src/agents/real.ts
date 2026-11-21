@@ -120,8 +120,10 @@ interface Staff {
   lastCfg: StartConfig | null;
   /** The job they last finished, and its conversation, so they can still be asked about it afterwards. */
   last: LastJob | null;
-  /** Answering the owner's message while free: no pitch is needed unless it's something to do. */
-  chatting?: boolean;
+  /** Answering the owner's message while free (their words): no pitch unless it's something to do, and then it's an order. */
+  chatting?: string | null;
+  /** An approved job whose folder couldn't be set up: the next message tries it again. */
+  stuck?: Idea | null;
   /** Answering the owner about that finished job, not doing a new one: what they asked. */
   followUp: string | null;
 }
@@ -232,7 +234,7 @@ const LOOK_AROUND = 'Have a look around and pitch one idea.';
 /** The owner talking to someone with nothing on. */
 const CHAT = (text: string) => `${OWNER} says: ${text}
 
-(If that's a question or a chat, just answer it briefly, with no pitch block. If it's something for you to do, end with the pitch block for it.)`;
+(If that's a question or a chat, just answer it briefly, with no pitch block. If it's something for you to do, work out which project it's about and end with the pitch block describing the job: you'll start on it right away, no approval needed. Don't explore much.)`;
 
 const short = (s: string, n = 120) => (s.length > n ? `${s.slice(0, n - 3)}...` : s);
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24);
@@ -382,7 +384,12 @@ export class RealCrew implements Crew {
       }
       return;
     }
-    if ((phase === 'work' || phase === 'stopped') && s.idea && s.workCwd) {
+    if (phase === 'stopped' && s.idea && !s.workCwd) {
+      // approved, but its folder never got set up: wait for a message to try again
+      s.stuck = s.idea;
+      this.setPhase(s, 'stopped');
+      this.emitNow(agentId, 'idle', `Couldn't start "${s.idea.title}". Message them to try again.`);
+    } else if ((phase === 'work' || phase === 'stopped') && s.idea && s.workCwd) {
       this.setPhase(s, 'work');
       this.note(agentId, `Picking "${s.idea.title}" back up`);
       this.emitNow(agentId, 'thinking', `Back on "${s.idea.title}"`);
@@ -535,6 +542,15 @@ export class RealCrew implements Crew {
     }
     this.note(agentId, `${OWNER}: ${text}${pictureNote(pictures)}`, { k: 'user', text, pics: pictures.length });
     let message = content(text, pictures);
+    if (s.stuck && !s.alive) {
+      // the approved job never got going: try it again, with these words added to it
+      const idea = s.stuck;
+      s.stuck = null;
+      if (!/^(ok(ay)?|go( ahead)?|yes|retry|try again|continue|do it)\b/i.test(text.trim()) || text.trim().split(/\s+/).length > 8) idea.orders = idea.orders ? `${idea.orders}\n\nAnd: ${text}` : text;
+      if (pictures.length) idea.pictures = [...(idea.pictures ?? []), ...pictures];
+      this.note(agentId, `Trying "${idea.title}" again`);
+      return void this.startWork(agentId, idea);
+    }
     if (s.phase === 'break' && s.alive) {
       // still chatting about the finished work: keep that session
       window.clearTimeout(s.breakTimer);
@@ -558,9 +574,21 @@ export class RealCrew implements Crew {
     } else if (s.role === 'worker' && s.desk) this.launch(agentId, { cwd: s.desk.cwd, system: this.workerSystem(s), prompt: message, mode: this.workMode(s.desk.mode) });
     else {
       // a question or a chat gets an answer; only something to do becomes a pitch
-      s.chatting = true;
+      s.chatting = text;
       this.research(agentId, CHAT(text), pictures);
     }
+  }
+
+  /** The approved job couldn't start: keep it, so the next message tries again instead of starting over. */
+  private setupFailed(agentId: string, idea: Idea, why: string) {
+    const s = this.staff.get(agentId);
+    if (!s) return;
+    this.note(agentId, why);
+    s.stuck = idea;
+    s.idea = idea;
+    this.setPhase(s, 'stopped');
+    this.emitNow(agentId, 'idle', `Couldn't start "${idea.title}". Message them to try again.`);
+    this.checkAllDone();
   }
 
   /** A manager talking about the team's finished job gets it back, so they can hand out more of it. */
@@ -932,6 +960,8 @@ export class RealCrew implements Crew {
     s.ordersPictures = [];
     s.idea = null;
     s.followUp = null;
+    s.stuck = null;
+    s.chatting = null;
     if (this.line.includes(agentId)) this.leaveLine(agentId);
   }
 
@@ -966,7 +996,7 @@ export class RealCrew implements Crew {
     s.nudged = false;
     s.pitched = false;
     s.permissions = [];
-    if (prompt === undefined || prompt === LOOK_AROUND || prompt === RESUME_RESEARCH || s.orders) s.chatting = false;
+    if (prompt === undefined || prompt === LOOK_AROUND || prompt === RESUME_RESEARCH || s.orders) s.chatting = null;
     const team = this.leads(s);
     const system = team ? MANAGER_RESEARCH_PROMPT(s.name, team.workers.map((w) => this.nameOf(w))) : RESEARCH_PROMPT(s.name);
     const avoid = s.seen.size ? ` Don't re-pitch these: ${[...s.seen].join('; ')}.` : '';
@@ -1078,8 +1108,7 @@ export class RealCrew implements Crew {
       s.workMode = place.mode;
       this.launch(agentId, { cwd: place.cwd, model: s.model || undefined, system: WORK_PROMPT(s.name, !idea.path), prompt: content(jobBrief(idea), idea.pictures), mode: this.workMode(place.mode) });
     } catch (e) {
-      this.note(agentId, `Couldn't set up the work: ${(e as Error).message}`);
-      this.research(agentId);
+      this.setupFailed(agentId, idea, `Couldn't set up the work: ${(e as Error).message}`);
     }
   }
 
@@ -1103,8 +1132,8 @@ export class RealCrew implements Crew {
       s.workMode = place.mode;
       this.launch(team.manager, { cwd: place.cwd, model: s.model || undefined, system: MANAGER_WORK_PROMPT(s.name, workers, team.job.branch), prompt: content(jobBrief(idea), idea.pictures), mode: this.workMode(place.mode) });
     } catch (e) {
-      this.note(team.manager, `Couldn't set up the team's work: ${(e as Error).message}`);
-      this.research(team.manager);
+      team.job = null;
+      this.setupFailed(team.manager, idea, `Couldn't set up the team's work: ${(e as Error).message}`);
     }
   }
 
@@ -1330,6 +1359,9 @@ export class RealCrew implements Crew {
     if (s.permissions.some((p) => p.ask?.kind === 'install')) return;
     const team = this.teamOf(s);
     if (s.phase === 'research') {
+      // they were told something to do while free: that's the owner's own request, so no pitch to approve
+      if (s.idea && s.chatting && !s.orders) s.orders = s.chatting;
+      if (s.idea) s.chatting = null;
       if (s.idea && s.orders) {
         // the owner's own request: no pitching, straight to work
         s.idea.orders = s.orders;
@@ -1345,7 +1377,7 @@ export class RealCrew implements Crew {
         this.refreshLine();
       } else if (msg.ok && s.chatting) {
         // answered the owner; back to waiting, and the countdown to a pitch starts again
-        s.chatting = false;
+        s.chatting = null;
         this.research(agentId);
       } else if (msg.ok && !s.nudged) {
         s.nudged = true;
