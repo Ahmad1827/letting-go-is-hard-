@@ -281,10 +281,64 @@ function setOn(next: boolean) {
   tabsKey = '';
 }
 
+/**
+ * With many people the tabs run off the edge, so the bar can be dragged
+ * sideways and the wheel scrolls it. A drag past a few pixels isn't a click,
+ * so letting go over a tab doesn't jump to it.
+ */
+function dragScroll(bar: HTMLElement) {
+  let startX = 0;
+  let startScroll = 0;
+  let id = -1;
+  let dragged = false;
+  bar.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || bar.scrollWidth <= bar.clientWidth) return;
+    id = e.pointerId;
+    startX = e.clientX;
+    startScroll = bar.scrollLeft;
+    dragged = false;
+  });
+  bar.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== id) return;
+    const dx = e.clientX - startX;
+    if (!dragged && Math.abs(dx) < 5) return;
+    if (!dragged) {
+      dragged = true;
+      bar.setPointerCapture(id);
+      bar.classList.add('dragging');
+    }
+    bar.scrollLeft = startScroll - dx;
+  });
+  const end = (e: PointerEvent) => {
+    if (e.pointerId !== id) return;
+    id = -1;
+    bar.classList.remove('dragging');
+  };
+  bar.addEventListener('pointerup', end);
+  bar.addEventListener('pointercancel', end);
+  // the click that ends a drag is swallowed before it reaches the tab
+  bar.addEventListener('click', (e) => {
+    if (!dragged) return;
+    dragged = false;
+    e.stopPropagation();
+    e.preventDefault();
+  }, true);
+  // a plain wheel scrolls the bar sideways (Ctrl + wheel stays zoom)
+  bar.addEventListener('wheel', (e) => {
+    if (e.ctrlKey || bar.scrollWidth <= bar.clientWidth) return;
+    const d = Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+    if (!d) return;
+    e.preventDefault();
+    e.stopPropagation();
+    bar.scrollLeft += d;
+  }, { passive: false });
+}
+
 export function initDeck() {
   // the tab bar starts right of the icon bar, however wide that is
   const dockBar = byId('dock');
   new ResizeObserver(() => deck().style.setProperty('--dock-w', `${dockBar.offsetWidth}px`)).observe(dockBar);
+  dragScroll(byId('deck-tabs'));
   byId('view-toggle').onclick = () => setOn(!on);
   byId('deck-out').onclick = () => zoom(null);
   byId('deck-group').onclick = () => bus.emit('team:new');
