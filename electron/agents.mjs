@@ -239,6 +239,11 @@ export function setupAgents(ipcMain, getWindow) {
         tallyTimer = null;
         tally.reset();
       }
+      // Claude Code waits for an answer to every request it sends; one left unanswered hangs the agent for good
+      if (m.type === 'control_request' && m.request?.subtype !== 'can_use_tool') {
+        answerOther(id, m);
+        return;
+      }
       const out = slim(m);
       if (!out) return;
       if (out.kind === 'delta') {
@@ -267,6 +272,23 @@ export function setupAgents(ipcMain, getWindow) {
     const line = JSON.stringify(obj) + '\n';
     if (!e.p) e.pending.push(line);
     else if (!e.p.stdin.destroyed) e.p.stdin.write(line);
+  }
+
+  /**
+   * Requests other than tool permissions. An MCP server asking a question
+   * (Blender's "share usage data?" on its first call, say) gets "no": the
+   * agents can't answer for the owner, and saying nothing hangs the tool call
+   * forever. Anything else is turned down, so it fails instead of waiting.
+   */
+  function answerOther(id, m) {
+    const r = m.request ?? {};
+    if (r.subtype === 'elicitation') {
+      write(id, { type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: { action: 'decline' } } });
+      const what = String(r.message ?? '').split('\n')[0].slice(0, 160);
+      emit(id, { kind: 'note', text: `${r.mcp_server_name ?? 'An MCP server'} asked "${what}" and was told no` });
+      return;
+    }
+    write(id, { type: 'control_response', response: { subtype: 'error', request_id: m.request_id, error: `Not supported here: ${r.subtype}` } });
   }
 
   function send(id, text) {
