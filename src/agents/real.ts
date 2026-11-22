@@ -31,7 +31,7 @@ type Msg =
 type Content = string | ({ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } })[];
 
 /** `lean`: only looking around for an idea, so no MCP servers, subagents or web, and the short brief. */
-interface StartConfig { cwd?: string; model?: string; engine?: string; system: string; prompt: Content; mode: string; resume?: string; skills?: string[]; lean?: boolean }
+interface StartConfig { cwd?: string; /** a missing cwd means: start in the projects folder instead (and fresh) */ anywhere?: boolean; model?: string; engine?: string; system: string; prompt: Content; mode: string; resume?: string; skills?: string[]; lean?: boolean }
 
 interface WorkRequest { project: string; projectPath: string | null; branch: string; isNew: boolean; base?: string; inPlace?: boolean }
 interface WorkPlace { cwd: string; path: string; mode: string; branch?: string; note: string }
@@ -181,7 +181,7 @@ const TEAM_TALK = (others: string[], manager: string) => `Talk to your teammates
 Teammates talk to each other directly to coordinate, ask and suggest, but ${manager} has the final say on the plan and on what gets merged: if you disagree, say so to ${manager} and go with their call. Keep messages short and only send one when it helps.`;
 
 /** What every agent can do on this PC, told to all of them. */
-const POWERS = `You have the same tools Claude Code has in a terminal on this PC. Once your work is approved you can run any program, and start apps to test your work (the app you're building, Blender, a browser...): start long-running ones in the background so you aren't stuck waiting, and close what you opened when you're done. Use the MCP tools you have (Blender's, for example, when Blender is open).
+const POWERS = `You have the same tools Claude Code has in a terminal on this PC. Once your work is approved you can run any program, and start apps to test your work (the app you're building, Blender, a browser...): start long-running ones in the background so you aren't stuck waiting, and close what you opened when you're done. Use the MCP tools you have (Blender's, for example, when Blender is open). If an app's MCP tools can't connect, the app isn't open: start it yourself (where it's installed is listed below), wait for it, and try again a few times, a few seconds apart. Never ask ${OWNER} to open an app you can start yourself; only ask if it really isn't installed or won't start.
 When something is ${OWNER}'s call, ask with the AskUserQuestion tool rather than guessing.
 Skills: every installed skill is yours to use; when one fits, load it with the Skill tool. If the task needs a skill that isn't installed, look for a plugin that has it with \`claude plugin list --available --json\` (the list is long: filter it, e.g. with grep), then end your message with a block like this and stop there:
 \`\`\`install
@@ -224,6 +224,11 @@ Rules: do only the task ${manager} gives you; stay inside the current folder; ${
 When you finish a task, reply with a short summary for ${manager}: what you changed and how to check it.
 ${TEAM_TALK(others, manager)}
 ${OWNER} or a teammate may message you; answer briefly.`;
+
+/** A worker between tasks, started up because the owner messaged them. */
+const WORKER_FREE_PROMPT = (name: string, manager: string, others: string[]) => `You are ${name}, a software engineer on ${manager}'s team in ${OWNER}'s office. You're between tasks right now, and ${OWNER} is messaging you.
+Answer ${OWNER} yourself, directly and briefly, from what you remember of your last work and by checking (git status, git log, the files) rather than guessing. If ${OWNER} asks you to do something, do it, then say in a line or two what you did; if it changes the team's work, let ${manager} know with a tell block.
+${TEAM_TALK(others, manager)}`;
 
 /** Told to anyone picking a job back up after the app was closed. */
 const RESUME = `You were paused (the office closed, or ${OWNER} put you on hold) while on this and you're back now. Check what you already did here (git status, git log, the files), then carry on and finish the job.`;
@@ -566,17 +571,35 @@ export class RealCrew implements Crew {
       return this.resume(agentId, 'stopped', 'Picking the job back up');
     }
     if (s.alive) this.bridge.send(agentId, message);
-    else if (s.role === 'worker' && !s.desk) {
-      // workers take their tasks from the manager: pass it up
-      const manager = this.teamOf(s)?.manager;
-      this.note(agentId, `${s.name} takes tasks from ${this.nameOf(manager ?? '')}; passed it on`);
-      if (manager) this.say(manager, `(for ${s.name}) ${text}`, pictures);
-    } else if (s.role === 'worker' && s.desk) this.launch(agentId, { cwd: s.desk.cwd, system: this.workerSystem(s), prompt: message, mode: this.workMode(s.desk.mode) });
+    else if (s.role === 'worker') this.wake(agentId, `${OWNER} says: ${text}`, pictures);
     else {
       // a question or a chat gets an answer; only something to do becomes a pitch
       s.chatting = text;
       this.research(agentId, CHAT(text), pictures);
     }
+  }
+
+  /**
+   * A worker who isn't running got a message from the owner: start them up to
+   * answer it themselves, in their last conversation so they remember what
+   * they did. Mid-task they answer and carry on; between tasks they just answer.
+   */
+  private wake(agentId: string, text: string, pictures: Picture[] = []) {
+    const s = this.staff.get(agentId)!;
+    const team = this.teamOf(s);
+    const manager = this.nameOf(team?.manager ?? '');
+    const onTask = !!(s.desk && team?.job && s.assignment);
+    this.setPhase(s, onTask ? 'work' : 'standby');
+    s.resumeNext = !!s.session;
+    const others = team ? [team.manager, ...team.workers].filter((id) => id !== agentId).map((id) => this.nameOf(id)) : [];
+    const system = onTask ? this.workerSystem(s) : WORKER_FREE_PROMPT(s.name, manager, others);
+    const prompt = onTask ? `${text}\n\n(Answer that, then carry on with your task if it isn't done.)` : text;
+    this.emitNow(agentId, 'thinking', 'Reading your message');
+    this.launch(agentId, {
+      // their worktree may be gone once the job was merged: then they start from the projects folder
+      cwd: s.desk?.cwd ?? s.session?.cwd ?? '', anywhere: true, model: s.model || undefined,
+      system, prompt: content(prompt, pictures), mode: this.workMode(s.desk?.mode ?? s.workMode),
+    });
   }
 
   /** The approved job couldn't start: keep it, so the next message tries again instead of starting over. */
@@ -808,7 +831,7 @@ export class RealCrew implements Crew {
       this.note(w, `${OWNER} (to ${team.name}): ${text}${pictureNote(pictures)}`, { k: 'user', text, pics: pictures.length });
       if (s.held) s.inbox.push(message);
       else if (s.alive) this.bridge.send(w, content(message, pictures));
-      else s.mail.push(message);
+      else this.wake(w, message, pictures);
     }
     // the manager acts on it: it may be a task, an answer to a pitch, or a change of plan
     this.say(team.manager, text, pictures);
@@ -1388,6 +1411,8 @@ export class RealCrew implements Crew {
       } else this.emitNow(agentId, 'idle', 'Stopped');
       return;
     }
+    // a worker between tasks answered something: back to waiting for the manager
+    if (s.phase === 'standby' && s.role === 'worker') return this.standby(agentId);
     if (s.phase !== 'work') return;
     if (!msg.ok) return this.emitNow(agentId, 'idle', 'Stopped. Message them to continue.');
     if (s.followUp && s.role !== 'worker') {

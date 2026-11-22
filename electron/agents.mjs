@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import { engine, settings } from './settings.mjs';
+import { appsBrief } from './apps.mjs';
 import { screenBrief } from './screen.mjs';
 import { catalog, forget, skillPrompt } from './skills.mjs';
 
@@ -176,9 +177,14 @@ export function setupAgents(ipcMain, getWindow) {
   }
 
   /** (Re)start an agent's Claude Code session. */
-  async function start(id, { cwd, model, system, prompt, mode, engine: engineId, resume, skills, lean }) {
+  async function start(id, { cwd, model, system, prompt, mode, engine: engineId, resume, skills, lean, anywhere }) {
     const eng = engine(engineId);
     stop(id);
+    // their folder is gone (a merged job's worktree): the projects folder will do, in a new conversation
+    if (anywhere && cwd && !existsSync(cwd)) {
+      cwd = '';
+      resume = undefined;
+    }
     const args = [
       '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
       '--permission-prompt-tool', 'stdio', '--permission-mode', mode || 'default',
@@ -198,7 +204,7 @@ export function setupAgents(ipcMain, getWindow) {
     send(id, prompt);
     // every skill is theirs; the ones picked for them are named as their go-to ones
     // lean (looking around for an idea): no MCP servers, subagents or web, so a pitch stays cheap
-    const brief = lean ? system : [system, skills?.length ? skillPrompt(skills) : '', screenBrief()].filter(Boolean).join('\n\n');
+    const brief = lean ? system : [system, skills?.length ? skillPrompt(skills) : '', screenBrief(), appsBrief()].filter(Boolean).join('\n\n');
     if (lean) args.push('--strict-mcp-config');
     args.push('--disallowedTools', [...NOT_HERE, ...(lean ? LEAN_OFF : [])].join(','), '--append-system-prompt', brief);
     const launch = launchOf(eng);

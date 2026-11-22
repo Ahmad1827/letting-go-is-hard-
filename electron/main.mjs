@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, readFileSync, renameSync, writeFileSync } fro
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setupAgents } from './agents.mjs';
+import { findApps } from './apps.mjs';
 import { startScreen } from './screen.mjs';
 import { listProjects } from './projects.mjs';
 import { loadSettings, saveSettings, settings, testEngine } from './settings.mjs';
@@ -154,6 +155,8 @@ app.whenReady().then(async () => {
   await loadSettings();
   // agents' screenshots, taken by the app itself
   startScreen();
+  // where Blender and co. are, so agents can open them themselves
+  void findApps();
   createWindow();
   app.on('activate', () => {
     if (!BrowserWindow.getAllWindows().length) createWindow();
