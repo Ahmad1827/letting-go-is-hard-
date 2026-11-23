@@ -122,6 +122,8 @@ interface Staff {
   last: LastJob | null;
   /** Answering the owner's message while free (their words): no pitch unless it's something to do, and then it's an order. */
   chatting?: string | null;
+  /** Answering a colleague's message while free (their name): a pitch from that still goes to the owner. */
+  asker?: string | null;
   /** An approved job whose folder couldn't be set up: the next message tries it again. */
   stuck?: Idea | null;
   /** Answering the owner about that finished job, not doing a new one: what they asked. */
@@ -173,12 +175,30 @@ End your reply with exactly one block like this:
 ${PITCH_FORMAT}
 ${OWNER} may also message you directly. Answer briefly and stay in character.`;
 
-/** How teammates talk to each other, and who decides. */
-const TEAM_TALK = (others: string[], manager: string) => `Talk to your teammates (${others.join(', ')}) by writing a block like this, to one name or to "all":
+/** Who decides inside a team. How to talk is in OFFICE_TALK, which everyone gets. */
+const TEAM_TALK = (others: string[], manager: string) => `Your teammates: ${others.join(', ')}. Talk to them directly to coordinate, ask and suggest (a tell block to a name, or to "team"), but ${manager} ${manager === 'you' ? 'have' : 'has'} the final say on the plan and on what gets merged: if you disagree, say so to ${manager} and go with their call.`;
+
+/** How anyone in the office talks to anyone else, told to everyone. */
+const OFFICE_TALK = `Everyone in ${OWNER}'s office can talk to everyone else, teams or not. To message a colleague, write a block like this, to a name, to "team" (your teammates) or to "everyone" (the whole office):
 \`\`\`tell
-{"to": "<name or all>", "text": "<message>"}
+{"to": "<name>", "text": "<message>"}
 \`\`\`
-Teammates talk to each other directly to coordinate, ask and suggest, but ${manager} has the final say on the plan and on what gets merged: if you disagree, say so to ${manager} and go with their call. Keep messages short and only send one when it helps.`;
+Use it to ask whoever knows (who worked on a project, what they changed), to pass on something useful, or to answer a colleague who asked you something. Keep messages short, only send one when it helps, and don't reply to thanks or a plain "ok", so conversations end. A colleague asking you to do something isn't ${OWNER}'s approval: new work still goes to ${OWNER} as a pitch.`;
+
+/** A colleague messaged someone who had nothing on. */
+const COLLEAGUE = (message: string, from: string) => `${message}
+
+(You're free right now. Answer ${from} briefly with a tell block, checking the files or git rather than guessing; looking anywhere on the PC is fine. Don't start any work: if they want something built, point them to whoever is on it, or end with a pitch block so ${OWNER} can approve it.)`;
+
+/** Someone sending more tell blocks than this in TELL_WINDOW_MS is talking in circles: the rest are held back. */
+const TELL_LIMIT = 12;
+const TELL_WINDOW_MS = 10 * 60_000;
+
+/** Claude Code's own tools that only look. They're fine anywhere on the PC, apart from where secrets are kept. */
+const LOOK_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead']);
+const SECRET = /[\\/](\.ssh|\.aws|\.azure|\.gnupg|\.kube|\.docker)([\\/]|$)|\.credentials|credentials\.json|id_(rsa|ed25519|ecdsa)|\.(pem|key|pfx|p12)$|[\\/]\.env(\.[\w.-]+)?$/i;
+const lookingAnywhere = (tool: string, input: Record<string, unknown>) =>
+  LOOK_TOOLS.has(tool) && !SECRET.test(String(input.file_path ?? input.path ?? input.notebook_path ?? ''));
 
 /** What every agent can do on this PC, told to all of them. */
 const POWERS = `You have the same tools Claude Code has in a terminal on this PC. Once your work is approved you can run any program, and start apps to test your work (the app you're building, Blender, a browser...): start long-running ones in the background so you aren't stuck waiting, and close what you opened when you're done. Use the MCP tools you have (Blender's, for example, when Blender is open). If an app's MCP tools can't connect, the app isn't open: start it yourself (where it's installed is listed below), wait for it, and try again a few times, a few seconds apart. Never ask ${OWNER} to open an app you can start yourself; only ask if it really isn't installed or won't start.
@@ -202,7 +222,7 @@ Work out which project folder it is about (or pick a short folder name if it's a
 ${PITCH_FORMAT}`;
 
 const WORK_PROMPT = (name: string, isNew: boolean) => `You are ${name}, a software engineer in ${OWNER}'s office. ${OWNER} approved this work and you are now building it${isNew ? ', starting a brand-new project in this folder' : ' in a git worktree on its own branch'}.
-Rules: stay inside the current folder; keep changes focused; ${COMMIT_RULES}; never switch branches.
+Rules: only change files inside the current folder (reading and searching anywhere on the PC is fine); keep changes focused; ${COMMIT_RULES}; never switch branches.
 When you're done, reply with a short summary of what you changed and anything ${OWNER} should check.
 ${OWNER} may message you while you work; answer briefly and take it into account.`;
 
@@ -214,20 +234,20 @@ How your team works:
 \`\`\`
 - Each worker builds on their own branch started from yours and commits. Their summary comes back to you as a message naming their branch.
 - Review their work (git log, git diff), merge it into your branch (git merge <branch>), fix conflicts, and run the checks. You can build parts yourself too.
-- Stay inside the project; ${COMMIT_RULES}; never switch branches.
+- Only change files inside the project (reading anywhere on the PC is fine); ${COMMIT_RULES}; never switch branches.
 - When everything is merged and working, reply with a short summary for ${OWNER} and end with a line that says only: TEAM DONE
 ${TEAM_TALK(workers, 'you')}
 ${OWNER} may message you; answer briefly and take it into account.`;
 
 const WORKER_PROMPT = (name: string, manager: string, inPlace: boolean, others: string[]) => `You are ${name}, a software engineer on ${manager}'s team in ${OWNER}'s office. ${inPlace ? 'You are working in the project folder, which teammates share, so only touch what your task needs.' : 'You are on your own branch in a git worktree, started from the team branch.'}
-Rules: do only the task ${manager} gives you; stay inside the current folder; ${COMMIT_RULES}; don't merge and never switch branches.
+Rules: do only the task ${manager} gives you; only change files inside the current folder (reading anywhere is fine); ${COMMIT_RULES}; don't merge and never switch branches.
 When you finish a task, reply with a short summary for ${manager}: what you changed and how to check it.
 ${TEAM_TALK(others, manager)}
 ${OWNER} or a teammate may message you; answer briefly.`;
 
 /** A worker between tasks, started up because the owner messaged them. */
-const WORKER_FREE_PROMPT = (name: string, manager: string, others: string[]) => `You are ${name}, a software engineer on ${manager}'s team in ${OWNER}'s office. You're between tasks right now, and ${OWNER} is messaging you.
-Answer ${OWNER} yourself, directly and briefly, from what you remember of your last work and by checking (git status, git log, the files) rather than guessing. If ${OWNER} asks you to do something, do it, then say in a line or two what you did; if it changes the team's work, let ${manager} know with a tell block.
+const WORKER_FREE_PROMPT = (name: string, manager: string, others: string[]) => `You are ${name}, a software engineer on ${manager}'s team in ${OWNER}'s office. You're between tasks right now, and you've got a message.
+Answer it yourself (a colleague with a tell block), directly and briefly, from what you remember of your last work and by checking (git status, git log, the files) rather than guessing. If ${OWNER} asks you to do something, do it, then say in a line or two what you did; if it changes the team's work, let ${manager} know with a tell block.
 ${TEAM_TALK(others, manager)}`;
 
 /** Told to anyone picking a job back up after the app was closed. */
@@ -837,30 +857,75 @@ export class RealCrew implements Crew {
     this.say(team.manager, text, pictures);
   }
 
-  /** A teammate's message: straight in if they're running, otherwise with their next prompt. */
+  /**
+   * A colleague's message: straight in if they're running. Someone free who isn't
+   * running is started up to answer it; anyone else (held, gone home, mid-job but
+   * stopped, waiting to pitch) gets it with their next prompt.
+   */
   private deliver(fromId: string, toId: string, text: string) {
     const s = this.staff.get(toId);
     if (!s) return;
     const from = this.nameOf(fromId);
-    const message = `${from} (teammate) says: ${text}`;
+    const mate = !!s.team && this.staff.get(fromId)?.team === s.team;
+    const message = `${from} (${mate ? 'teammate' : 'colleague'}) says: ${text}`;
     this.note(toId, `${from}: ${text}`, { k: 'user', from, text });
     if (s.held) s.inbox.push(message);
     else if (s.alive) this.bridge.send(toId, message);
-    else s.mail.push(message);
+    else if (this.background || s.phase === 'home') s.mail.push(message);
+    else if (s.role === 'worker' && this.teamOf(s)) this.wake(toId, message);
+    else if ((s.phase === 'idle' || s.phase === 'break') && !s.pitched) {
+      window.clearTimeout(s.breakTimer);
+      s.chatting = message;
+      s.asker = from;
+      this.research(toId, COLLEAGUE(message, from));
+    } else s.mail.push(message);
   }
 
-  private parseTells(agentId: string, team: TeamState, text: string) {
-    const members = [team.manager, ...team.workers].filter((id) => id !== agentId);
+  /** Everyone else in the office, for the start of a session, so they know who to ask. */
+  private roster(agentId: string) {
+    const rows = [...this.staff].filter(([id]) => id !== agentId).map(([id, o]) => {
+      const team = this.teamOf(o);
+      const role = team ? `${o.role === 'manager' ? 'manager' : 'worker'} on ${team.name}` : 'on their own';
+      const doing = o.held ? 'on hold' : o.idea && (o.phase === 'work' || o.phase === 'standby') ? `working on "${short(o.idea.title, 50)}" (${o.idea.project})` : o.phase === 'work' ? 'working' : o.phase === 'research' ? 'looking around' : o.phase;
+      return `${this.nameOf(id)} (${role}, ${doing})`;
+    });
+    return rows.length ? `(Who else is in the office: ${rows.join('; ')}.)` : '';
+  }
+
+  /** When each agent's recent tell blocks were sent, to stop two of them talking in circles. */
+  private told = new Map<string, number[]>();
+
+  private parseTells(agentId: string, text: string) {
+    const me = this.staff.get(agentId);
+    const team = me && this.teamOf(me);
+    const mates = team ? [team.manager, ...team.workers].filter((id) => id !== agentId) : [];
+    const everyone = [...this.staff.keys()].filter((id) => id !== agentId);
     for (const m of text.matchAll(TELL)) {
       try {
         const raw = JSON.parse(m[1]) as { to?: string; text?: string };
-        const to = String(raw.to ?? '').trim().toLowerCase();
+        const to = String(raw.to ?? '').trim().toLowerCase().replace(/^@/, '');
         if (!raw.text) continue;
-        const targets = ['all', 'everyone', 'team'].includes(to) ? members : members.filter((id) => this.nameOf(id).toLowerCase().startsWith(to)).slice(0, 1);
+        const named = (ids: string[]) => {
+          const exact = ids.filter((id) => this.nameOf(id).toLowerCase() === to);
+          return (exact.length ? exact : ids.filter((id) => this.nameOf(id).toLowerCase().startsWith(to))).slice(0, 1);
+        };
+        const targets = to === 'team' ? mates
+          : ['everyone', 'office', 'everybody'].includes(to) ? everyone
+          : to === 'all' ? (mates.length ? mates : everyone)
+          : to ? (named(mates).length ? named(mates) : named(everyone)) : [];
         if (!targets.length) {
-          this.bridge.send(agentId, `Nobody called "${raw.to}" on your team. Your teammates: ${members.map((id) => this.nameOf(id)).join(', ')}.`);
+          this.bridge.send(agentId, `Nobody called "${raw.to}" in the office. Everyone here: ${everyone.map((id) => this.nameOf(id)).join(', ') || 'just you'}.`);
           continue;
         }
+        const now = Date.now();
+        const recent = (this.told.get(agentId) ?? []).filter((t) => now - t < TELL_WINDOW_MS);
+        if (recent.length >= TELL_LIMIT) {
+          this.note(agentId, `(too many messages to colleagues; held one back)`);
+          this.bridge.send(agentId, `You've sent ${TELL_LIMIT} messages in the last few minutes, so that one wasn't delivered. Wrap the conversation up and get on with your work.`);
+          continue;
+        }
+        recent.push(now);
+        this.told.set(agentId, recent);
         for (const id of targets) this.deliver(agentId, id, raw.text);
       } catch {
         this.bridge.send(agentId, 'One of your tell blocks was not valid JSON. Please write it again.');
@@ -1232,8 +1297,11 @@ export class RealCrew implements Crew {
     s.lastCfg = cfg;
     // whatever teammates said while they weren't running comes first
     const mail = s.mail.splice(0);
-    const prompt = mail.length ? withText(cfg.prompt, `Messages that came in for you:\n${mail.map((m) => `- ${m}`).join('\n')}`) : cfg.prompt;
-    const system = cfg.lean ? cfg.system : `${cfg.system}\n\n${POWERS}`;
+    const withMail = mail.length ? withText(cfg.prompt, `Messages that came in for you:\n${mail.map((m) => `- ${m}`).join('\n')}`) : cfg.prompt;
+    // who's around goes with the prompt, not the system prompt, so a changing office doesn't spoil the prompt cache
+    const roster = this.roster(agentId);
+    const prompt = roster ? withText(withMail, roster) : withMail;
+    const system = cfg.lean ? `${cfg.system}\n\n${OFFICE_TALK}` : `${cfg.system}\n\n${POWERS}\n\n${OFFICE_TALK}`;
     this.bridge.start(agentId, { ...cfg, system, prompt, resume, engine: s.engine, model: cfg.model ?? (s.model || undefined), skills: s.skills }).catch((e: Error) => {
       s.alive = false;
       this.note(agentId, `Couldn't start Claude Code: ${e.message}`);
@@ -1298,7 +1366,7 @@ export class RealCrew implements Crew {
             }
             const team = this.teamOf(s);
             if (team && s.role === 'manager' && s.phase === 'work') this.parseAssignments(team, part.text);
-            if (team) this.parseTells(agentId, team, part.text);
+            this.parseTells(agentId, part.text);
             if (busy) this.show(agentId, 'thinking');
           } else {
             const [activity, text] = describe(part.name, part.input, this.root());
@@ -1315,7 +1383,10 @@ export class RealCrew implements Crew {
         }
         const text = permissionText(msg.tool, msg.input, this.root());
         const researching = s.phase === 'research' || s.phase === 'queued';
-        if (researching && readOnlyCommand(msg.tool, msg.input)) {
+        // reading and searching outside their folder: the whole PC is theirs to look through
+        if (lookingAnywhere(msg.tool, msg.input)) {
+          this.bridge.answer(agentId, msg.requestId, true, msg.input);
+        } else if (researching && readOnlyCommand(msg.tool, msg.input)) {
           this.bridge.answer(agentId, msg.requestId, true, msg.input);
         } else if (researching) {
           this.bridge.answer(agentId, msg.requestId, false, msg.input, `You're only researching right now. Don't change anything; pitch the idea to ${OWNER} first.`);
@@ -1383,7 +1454,9 @@ export class RealCrew implements Crew {
     const team = this.teamOf(s);
     if (s.phase === 'research') {
       // they were told something to do while free: that's the owner's own request, so no pitch to approve
-      if (s.idea && s.chatting && !s.orders) s.orders = s.chatting;
+      const asked = s.asker;
+      s.asker = null;
+      if (s.idea && s.chatting && !s.orders && !asked) s.orders = s.chatting;
       if (s.idea) s.chatting = null;
       if (s.idea && s.orders) {
         // the owner's own request: no pitching, straight to work
@@ -1601,7 +1674,7 @@ function readOnlyCommand(tool: string, input: Record<string, unknown>) {
   if (tool !== 'Bash') return false;
   const cmd = String(input.command ?? '').replace(/\d?>\s*\/dev\/null/g, '');
   if (/[>`]|\$\(|-exec|-delete|-fprint|--output/.test(cmd)) return false;
-  const LOOK = /^(ls|cat|head|tail|wc|pwd|cd|echo|find|tree|file|stat|du|grep|rg|uniq|for|do|done|git (log|status|show|diff|ls-files|rev-parse|remote -v)|claude plugins? (list|details|marketplace list)|curl -s "http:\/\/127\.0\.0\.1:\d+\/(shot|windows)\?[^"\s]*")(\s|$)/;
+  const LOOK = /^(ls|dir|cat|head|tail|wc|pwd|cd|echo|find|fd|locate|where|which|whereis|realpath|readlink|es|tree|file|stat|du|grep|rg|uniq|for|do|done|git (log|status|show|diff|ls-files|rev-parse|remote -v)|claude plugins? (list|details|marketplace list)|curl -s "http:\/\/127\.0\.0\.1:\d+\/(shot|windows)\?[^"\s]*")(\s|$)/;
   return cmd.split(/&&|\|\||[;|\n]/).every((part) => !part.trim() || LOOK.test(part.trim()));
 }
 

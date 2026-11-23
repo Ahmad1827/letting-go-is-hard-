@@ -11,6 +11,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { engine, settings } from './settings.mjs';
 import { appsBrief } from './apps.mjs';
+import { pcBrief } from './pc.mjs';
 import { screenBrief } from './screen.mjs';
 import { catalog, forget, skillPrompt } from './skills.mjs';
 
@@ -204,7 +205,7 @@ export function setupAgents(ipcMain, getWindow) {
     send(id, prompt);
     // every skill is theirs; the ones picked for them are named as their go-to ones
     // lean (looking around for an idea): no MCP servers, subagents or web, so a pitch stays cheap
-    const brief = lean ? system : [system, skills?.length ? skillPrompt(skills) : '', screenBrief(), appsBrief()].filter(Boolean).join('\n\n');
+    const brief = lean ? system : [system, skills?.length ? skillPrompt(skills) : '', pcBrief(), screenBrief(), appsBrief()].filter(Boolean).join('\n\n');
     if (lean) args.push('--strict-mcp-config');
     args.push('--disallowedTools', [...NOT_HERE, ...(lean ? LEAN_OFF : [])].join(','), '--append-system-prompt', brief);
     const launch = launchOf(eng);

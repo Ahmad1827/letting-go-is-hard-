@@ -81,6 +81,10 @@ installed on this machine, using its existing login (no API key). Electron's mai
 runs one headless session per agent (`electron/agents.mjs`) and the office answers its
 permission prompts:
 
+- **The whole PC:** agents are told where your home folder, Desktop, Documents, Downloads and
+  every drive are (`electron/pc.mjs`), and find files and folders by name themselves instead of
+  asking where they are. Reading and searching are allowed anywhere without asking, except
+  where secrets are kept (`.ssh`, `.aws`, `.env` files, keys); changes stay inside their own folder.
 - Agents get everything Claude Code has in a terminal: every built-in tool, every installed
   skill, and the MCP servers set up on this machine (e.g. a Blender server). Only moving
   between worktrees is left to the office.
@@ -147,8 +151,12 @@ earlier messages, Ctrl+V for pictures), and permission questions are answered ri
 with 1 or 2. `/help` lists the commands (`/clear`, `/stop`, `/hold`, `/reopen`, `/model`).
 Click a team's name in Staff (or its `>_ Team`) for the team's terminal: everyone's lines
 together, tagged by name. A message there goes to the whole team and the manager decides
-what happens; start with `@Name` for one person. Teammates talk to each other too (a
-```` ```tell ```` block the office delivers), but the manager has the final say. Windows can be
+what happens; start with `@Name` for one person. Everyone in the office can talk to
+everyone else, on a team or not (a ```` ```tell ```` block the office delivers, to a name,
+`team` or `everyone`): each session starts with a list of who's around and what they're on.
+Someone free who gets a question is started up to answer it; a colleague's request is never
+an approval, so new work still comes to you as a pitch. Inside a team the manager has the
+final say. Someone sending more than 12 messages in 10 minutes is told to wrap it up. Windows can be
 dragged, resized and minimized, and the history is kept between runs.
 
 **Terminal view** (the `>_` icon in the top bar, or **T**): the office as nothing but
