@@ -2,14 +2,27 @@
 // the agents know the key to. `curl` it and the app takes a screenshot with
 // Electron's own capturer (no extra tools needed on Windows or Linux), saves
 // it as a PNG and answers with the path, which the agent opens with Read.
-import { desktopCapturer, screen } from 'electron';
+import { app, desktopCapturer, screen } from 'electron';
 import { randomBytes } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { promises as fs, readFileSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
-const key = randomBytes(16).toString('hex');
+/**
+ * The key and port are kept between runs: a resumed conversation keeps the
+ * system prompt it started with, so a new address each run would leave
+ * everyone picking a conversation back up with one that no longer works.
+ */
+const saved = path.join(app.getPath('userData'), 'screen.json');
+const kept = (() => {
+  try {
+    return JSON.parse(readFileSync(saved, 'utf8'));
+  } catch {
+    return {};
+  }
+})();
+const key = typeof kept.key === 'string' && kept.key.length >= 32 ? kept.key : randomBytes(16).toString('hex');
 const shots = path.join(os.tmpdir(), 'letting-go-shots');
 /** Screenshots older than this are cleared away when a new one is taken. */
 const KEEP_MS = 60 * 60 * 1000;
@@ -77,9 +90,18 @@ export function startScreen() {
       reply(500, `Couldn't capture: ${e.message}`);
     }
   });
-  server.listen(0, '127.0.0.1', () => {
-    base = `http://127.0.0.1:${server.address().port}`;
-  });
+  const up = () => {
+    const port = server.address().port;
+    base = `http://127.0.0.1:${port}`;
+    try {
+      writeFileSync(saved, JSON.stringify({ key, port }));
+    } catch {
+      // only means a new address next run
+    }
+  };
+  // last run's port if it's free, any port if not
+  server.once('error', () => server.listen(0, '127.0.0.1', up));
+  server.listen(Number.isInteger(kept.port) ? kept.port : 0, '127.0.0.1', up);
   return server;
 }
 

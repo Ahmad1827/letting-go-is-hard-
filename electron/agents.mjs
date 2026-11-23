@@ -5,10 +5,12 @@
 // on stdout. Permission prompts come back as control requests, which the
 // office answers (approve/deny) instead of a terminal.
 import { execFile, spawn } from 'node:child_process';
-import { existsSync, promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, promises as fs, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
+import { app } from 'electron';
 import { engine, settings } from './settings.mjs';
 import { appsBrief } from './apps.mjs';
 import { pcBrief } from './pc.mjs';
@@ -22,7 +24,42 @@ import { catalog, forget, skillPrompt } from './skills.mjs';
  */
 const NOT_HERE = ['EnterWorktree', 'ExitWorktree'];
 /** Left out while someone is only looking around for an idea: the costly ways to look. */
-const LEAN_OFF = ['Agent', 'Task', 'WebSearch', 'WebFetch'];
+const LEAN_OFF = ['Agent', 'Task', 'WebSearch', 'WebFetch', 'Skill'];
+
+/**
+ * The standing instructions each conversation was given, by session id (a hash).
+ * Claude Code keeps a conversation's first system prompt for good, even when a
+ * resume passes a new one, so changed instructions have to go in as a message.
+ */
+const briefsFile = () => path.join(app.getPath('userData'), 'briefs.json');
+let briefs = null;
+const hashOf = (text) => createHash('sha1').update(text).digest('hex').slice(0, 16);
+function briefOf(session) {
+  if (!briefs) {
+    try {
+      briefs = JSON.parse(readFileSync(briefsFile(), 'utf8'));
+    } catch {
+      briefs = {};
+    }
+  }
+  return briefs[session];
+}
+function rememberBrief(session, hash) {
+  briefOf(session);
+  if (briefs[session] === hash) return;
+  delete briefs[session];
+  briefs[session] = hash;
+  // the newest few hundred are plenty
+  const keys = Object.keys(briefs);
+  for (const k of keys.slice(0, Math.max(0, keys.length - 400))) delete briefs[k];
+  try {
+    writeFileSync(briefsFile(), JSON.stringify(briefs));
+  } catch {
+    // only means the instructions are sent again next time
+  }
+}
+/** A message with a note in front of it, for plain text and for text with pictures. */
+const prefixed = (note, content) => (typeof content === 'string' ? `${note}\n\n${content}` : [{ type: 'text', text: note }, ...content]);
 /** Approved work happens in git worktrees here, so a project's own checkout is never touched. */
 const worktrees = () => path.join(settings().projectsRoot, '.letting-go', 'worktrees');
 
@@ -178,7 +215,7 @@ export function setupAgents(ipcMain, getWindow) {
   }
 
   /** (Re)start an agent's Claude Code session. */
-  async function start(id, { cwd, model, system, prompt, mode, engine: engineId, resume, skills, lean, anywhere }) {
+  async function start(id, { cwd, model, system, prompt, mode, engine: engineId, resume, skills, lean, anywhere, effort }) {
     const eng = engine(engineId);
     stop(id);
     // their folder is gone (a merged job's worktree): the projects folder will do, in a new conversation
@@ -191,6 +228,10 @@ export function setupAgents(ipcMain, getWindow) {
       '--permission-prompt-tool', 'stdio', '--permission-mode', mode || 'default',
     ];
     if (model) args.push('--model', model);
+    // quick answers and looking for ideas don't need the deepest thinking; real work keeps the model's own
+    if (effort) args.push('--effort', effort);
+    // where they are (folder, git status) goes in the first message, so the rest of Claude Code's prompt is shared and cached across agents
+    args.push('--exclude-dynamic-system-prompt-sections');
     // pick last time's conversation back up, so they remember what was said and done
     if (resume) args.push('--resume', resume);
     const dir = cwd || settings().projectsRoot;
@@ -202,10 +243,13 @@ export function setupAgents(ipcMain, getWindow) {
     // messages sent while the skills are being looked up wait here until the process exists
     const entry = { p: null, closed: false, pending: [] };
     procs.set(id, entry);
-    send(id, prompt);
     // every skill is theirs; the ones picked for them are named as their go-to ones
-    // lean (looking around for an idea): no MCP servers, subagents or web, so a pitch stays cheap
+    // lean (looking around for an idea): no MCP servers, subagents, skills or web, so a pitch stays cheap
     const brief = lean ? system : [system, skills?.length ? skillPrompt(skills) : '', pcBrief(), screenBrief(), appsBrief()].filter(Boolean).join('\n\n');
+    const hash = hashOf(brief);
+    // a picked-up conversation still has the instructions it started with: hand over the new ones if they changed
+    const stale = resume && briefOf(resume) !== hash;
+    send(id, stale ? prefixed(`(Your standing instructions have changed. Where they differ from what you were told before, follow these:\n\n${brief})`, prompt) : prompt);
     if (lean) args.push('--strict-mcp-config');
     args.push('--disallowedTools', [...NOT_HERE, ...(lean ? LEAN_OFF : [])].join(','), '--append-system-prompt', brief);
     const launch = launchOf(eng);
@@ -233,6 +277,7 @@ export function setupAgents(ipcMain, getWindow) {
       } catch {
         return;
       }
+      if (m.type === 'system' && m.subtype === 'init' && m.session_id) rememberBrief(m.session_id, hash);
       if (tally.see(m)) tallyTimer ??= setTimeout(sendTally, USAGE_MS);
       // the turn's real total comes with the result; the running count starts over
       if (m.type === 'result') {

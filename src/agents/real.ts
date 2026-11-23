@@ -31,7 +31,7 @@ type Msg =
 type Content = string | ({ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } })[];
 
 /** `lean`: only looking around for an idea, so no MCP servers, subagents or web, and the short brief. */
-interface StartConfig { cwd?: string; /** a missing cwd means: start in the projects folder instead (and fresh) */ anywhere?: boolean; model?: string; engine?: string; system: string; prompt: Content; mode: string; resume?: string; skills?: string[]; lean?: boolean }
+interface StartConfig { cwd?: string; /** a missing cwd means: start in the projects folder instead (and fresh) */ anywhere?: boolean; model?: string; engine?: string; system: string; prompt: Content; mode: string; resume?: string; skills?: string[]; lean?: boolean; /** Claude Code's --effort; unset keeps the model's own, for real work. */ effort?: string }
 
 interface WorkRequest { project: string; projectPath: string | null; branch: string; isNew: boolean; base?: string; inPlace?: boolean }
 interface WorkPlace { cwd: string; path: string; mode: string; branch?: string; note: string }
@@ -189,6 +189,9 @@ Use it to ask whoever knows (who worked on a project, what they changed), to pas
 const COLLEAGUE = (message: string, from: string) => `${message}
 
 (You're free right now. Answer ${from} briefly with a tell block, checking the files or git rather than guessing; looking anywhere on the PC is fine. Don't start any work: if they want something built, point them to whoever is on it, or end with a pitch block so ${OWNER} can approve it.)`;
+
+/** How hard to think when only answering or looking for an idea: real work keeps the model's own effort. */
+const QUICK = 'medium';
 
 /** Someone sending more tell blocks than this in TELL_WINDOW_MS is talking in circles: the rest are held back. */
 const TELL_LIMIT = 12;
@@ -604,7 +607,7 @@ export class RealCrew implements Crew {
    * answer it themselves, in their last conversation so they remember what
    * they did. Mid-task they answer and carry on; between tasks they just answer.
    */
-  private wake(agentId: string, text: string, pictures: Picture[] = []) {
+  private wake(agentId: string, text: string, pictures: Picture[] = [], fromColleague = false) {
     const s = this.staff.get(agentId)!;
     const team = this.teamOf(s);
     const manager = this.nameOf(team?.manager ?? '');
@@ -619,6 +622,8 @@ export class RealCrew implements Crew {
       // their worktree may be gone once the job was merged: then they start from the projects folder
       cwd: s.desk?.cwd ?? s.session?.cwd ?? '', anywhere: true, model: s.model || undefined,
       system, prompt: content(prompt, pictures), mode: this.workMode(s.desk?.mode ?? s.workMode),
+      // a colleague's question between tasks only needs an answer
+      ...(fromColleague && !onTask ? { effort: QUICK } : {}),
     });
   }
 
@@ -872,7 +877,7 @@ export class RealCrew implements Crew {
     if (s.held) s.inbox.push(message);
     else if (s.alive) this.bridge.send(toId, message);
     else if (this.background || s.phase === 'home') s.mail.push(message);
-    else if (s.role === 'worker' && this.teamOf(s)) this.wake(toId, message);
+    else if (s.role === 'worker' && this.teamOf(s)) this.wake(toId, message, [], true);
     else if ((s.phase === 'idle' || s.phase === 'break') && !s.pitched) {
       window.clearTimeout(s.breakTimer);
       s.chatting = message;
@@ -1091,7 +1096,8 @@ export class RealCrew implements Crew {
     // just looking for an idea of their own (nothing the owner asked): the cheap model and a lean session
     const looking = !s.orders && (prompt === undefined || prompt === LOOK_AROUND || prompt === RESUME_RESEARCH);
     const text = (prompt ?? LOOK_AROUND) + avoid + (looking && prompt !== RESUME_RESEARCH ? this.projectsBrief() : '');
-    this.launch(agentId, { model: looking ? this.pitchModel(s) : s.model || undefined, system, prompt: content(text, pictures), mode: 'default', lean: looking });
+    // researching only ever ends in an answer or a pitch block, never in the work itself
+    this.launch(agentId, { model: looking ? this.pitchModel(s) : s.model || undefined, system, prompt: content(text, pictures), mode: 'default', lean: looking, effort: QUICK });
     this.note(agentId, s.orders ? 'Working out what that means' : 'Looking through the projects for something to improve');
     this.emitNow(agentId, 'thinking');
   }

@@ -26,9 +26,25 @@ to do for 5 minutes (change it under *Settings → Pitches*); a message from you
 puts them to work on that instead.
 
 Looking for an idea is kept cheap: it runs on Haiku by default (*Settings → Pitches*), in a
-lean session with no MCP servers, subagents or web searches, and the agent is handed a summary
+lean session with no MCP servers, subagents, skills or web searches, and the agent is handed a summary
 of every project so it reads a few files instead of exploring. Approved work runs on the
-agent's own model with everything. Unticked, they stop looking for ideas and go back to idle
+agent's own model with everything.
+
+Other ways tokens are saved without hurting the work:
+
+- **Effort to match the job.** Answering a question, answering a colleague, working out what you
+  asked for and looking for ideas run at medium effort; approved work keeps the model's full effort.
+- **Shared prompt cache.** Agents start with `--exclude-dynamic-system-prompt-sections`, so the
+  folder and git status go in the first message and the rest of Claude Code's prompt is cached
+  once for everyone instead of once per agent.
+- **The roster goes in the prompt**, not the system prompt, so hiring someone doesn't throw away
+  everyone's cached conversation.
+- **Instructions stay current without starting over.** Claude Code keeps a conversation's first
+  system prompt even when it's resumed, so when an agent's instructions have changed (an app
+  update, new skills) the office sends the new ones once as a message (`briefs.json` in the app's
+  data folder remembers what each conversation was told). The screenshot server keeps the same
+  port and key between runs (`screen.json`), so that doesn't count as a change.
+- **Conversations that go in circles are cut off:** 12 messages to colleagues in 10 minutes at most. Unticked, they stop looking for ideas and go back to idle
 once their current job is done.
 
 1. **Research**: looks through the folders in `~/proiecte` (in the conference room and the archive).
