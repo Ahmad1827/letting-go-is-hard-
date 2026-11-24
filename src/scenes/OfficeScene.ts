@@ -258,6 +258,10 @@ export class OfficeScene extends Phaser.Scene {
       this.crew.setIdeas(id, on);
       this.dirty = true;
     });
+    bus.on('agent:frugal', ({ id, on }: { id: string; on: boolean }) => {
+      this.crew.setFrugal(id, on);
+      this.dirty = true;
+    });
     bus.on('agent:stop', (id: string) => this.crew.interrupt(id));
     bus.on('agent:engine', ({ id, engine }: { id: string; engine: string }) => {
       this.crew.setEngine(id, engine);

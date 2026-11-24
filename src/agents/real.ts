@@ -63,6 +63,8 @@ interface Staff {
   skills: string[];
   /** Ticked: when free they look around and pitch ideas. Unticked: idle until told what to do. */
   ideas: boolean;
+  /** Told to keep usage low: lighter effort and a leaner way of working, until told otherwise. */
+  frugal: boolean;
   /** Where approved work is happening, once it starts, and its permission mode. */
   workCwd: string | null;
   workMode: string;
@@ -201,6 +203,10 @@ const COLLEAGUE = (message: string, from: string) => `${message}
 /** How hard to think when only answering or looking for an idea: real work keeps the model's own effort. */
 const QUICK = 'medium';
 
+/** Asked to keep usage low: real work drops to medium effort and quick answers to low, and they're told how. */
+const FRUGAL_EFFORT: Record<string, string> = { medium: 'low' };
+const FRUGAL = `${OWNER} wants you to keep usage low. Read only the files you need (search first instead of reading whole folders, and don't re-read what you've seen), run builds and tests only when they tell you something you need, don't start subagents, keep your messages short, and take the simplest approach that does the job.`;
+
 /** Someone sending more tell blocks than this in TELL_WINDOW_MS is talking in circles: the rest are held back. */
 const TELL_LIMIT = 12;
 const TELL_WINDOW_MS = 10 * 60_000;
@@ -229,6 +235,7 @@ ${PITCH_FORMAT}
 ${OWNER} may also message you directly. Answer briefly and stay in character.`;
 
 const ORDERS_PROMPT = (text: string, forTeam: boolean) => `${OWNER} wants ${forTeam ? 'your team' : 'you'} to do this: "${text}"
+Keep to the size ${OWNER} asked for: a prototype, a mock-up or a quick version means the smallest thing that works and shows the idea, not a finished product; "polished" or "complete" means the full thing.
 Work out which project folder it is about (or pick a short folder name if it's a new project) and reply with only a pitch block describing the job. Don't explore much; you'll start right away.
 ${PITCH_FORMAT}`;
 
@@ -306,7 +313,7 @@ export class RealCrew implements Crew {
 
   private fresh(name: string): Staff {
     return {
-      name, phase: 'research', since: Date.now(), engine: this.settings.defaultEngine, model: this.settings.defaultModel, skills: [...(this.settings.defaultSkills ?? [])], ideas: false, workCwd: null, workMode: 'default', idea: null, seen: new Set(), alive: false, nudged: false, permissions: [], place: 0,
+      name, phase: 'research', since: Date.now(), engine: this.settings.defaultEngine, model: this.settings.defaultModel, skills: [...(this.settings.defaultSkills ?? [])], ideas: false, frugal: false, workCwd: null, workMode: 'default', idea: null, seen: new Set(), alive: false, nudged: false, permissions: [], place: 0,
       pitched: false, orders: null, ordersPictures: [], team: null, role: null, assignment: null, desk: null,
       activity: 'idle', lastShown: 0, usage: { tokens: 0, cost: 0 }, sessionCost: 0,
       session: null, launchCwd: '', resumeNext: false, retry: null, held: null, inbox: [], live: '', turnTokens: 0, tools: new Map(),
@@ -319,7 +326,7 @@ export class RealCrew implements Crew {
     const noPictures = (idea: Idea | null) => idea && { ...idea, pictures: undefined };
     return {
       staff: [...this.staff].map(([id, s]) => ({
-        id, name: s.name, engine: s.engine, model: s.model, skills: s.skills, ideas: s.ideas, usage: s.usage, seen: [...s.seen],
+        id, name: s.name, engine: s.engine, model: s.model, skills: s.skills, ideas: s.ideas, frugal: s.frugal, usage: s.usage, seen: [...s.seen],
         phase: s.pitched ? 'pitching' : s.phase,
         idea: noPictures(s.idea),
         work: s.workCwd ? { cwd: s.workCwd, mode: s.workMode } : null,
@@ -332,7 +339,7 @@ export class RealCrew implements Crew {
   restore(save: CrewSave, ready?: Promise<unknown>) {
     for (const p of save.staff) {
       this.staff.set(p.id, {
-        ...this.fresh(p.name), engine: p.engine, model: p.model, skills: p.skills ?? [], ideas: p.ideas ?? false, usage: { ...p.usage }, seen: new Set(p.seen),
+        ...this.fresh(p.name), engine: p.engine, model: p.model, skills: p.skills ?? [], ideas: p.ideas ?? false, frugal: p.frugal ?? false, usage: { ...p.usage }, seen: new Set(p.seen),
         idea: p.idea, workCwd: p.work?.cwd ?? null, workMode: p.work?.mode ?? 'default', desk: p.desk as WorkPlace | null, assignment: p.assignment,
         session: p.session ?? null, resumeNext: !!p.session, held: p.held ?? null, inbox: p.inbox ?? [], mail: p.mail ?? [], orders: p.orders ?? null, last: (p.last as LastJob | null) ?? null,
         ...(p.held ? { phase: 'held' as Phase } : {}),
@@ -732,6 +739,15 @@ export class RealCrew implements Crew {
     else if (!on && (s.phase === 'idle' || (s.phase === 'research' && !s.orders))) this.idle(agentId);
   }
 
+  setFrugal(agentId: string, on: boolean) {
+    const s = this.staff.get(agentId);
+    if (!s || s.frugal === on) return;
+    s.frugal = on;
+    this.note(agentId, on ? `${OWNER} asked ${s.name} to keep usage low` : `${OWNER} told ${s.name} usage doesn't need saving any more`);
+    // lighter effort comes with the next start; how to work is told now if they're running
+    if (s.alive && !s.held) this.bridge.send(agentId, on ? `${FRUGAL} This counts from now on. Reply in one line, then carry on.` : `${OWNER}: you don't need to save usage any more; work the way the job needs. Reply in one line, then carry on.`);
+  }
+
   usageOf(agentId: string) {
     const s = this.staff.get(agentId);
     return s ? { tokens: s.usage.tokens + s.turnTokens, cost: s.usage.cost, turn: s.turnTokens } : null;
@@ -755,6 +771,7 @@ export class RealCrew implements Crew {
       branch: working ? s.desk?.branch ?? s.idea?.branch ?? null : null,
       engine: s.engine,
       ideas: s.ideas,
+      frugal: s.frugal,
       pitch: s.phase === 'queued' && s.idea && !s.orders ? s.idea : null,
     };
   }
@@ -1339,8 +1356,10 @@ export class RealCrew implements Crew {
     // who's around goes with the prompt, not the system prompt, so a changing office doesn't spoil the prompt cache
     const roster = this.roster(agentId);
     const prompt = roster ? withText(withMail, roster) : withMail;
-    const system = cfg.lean ? `${cfg.system}\n\n${OFFICE_TALK}` : `${cfg.system}\n\n${POWERS}\n\n${OFFICE_TALK}`;
-    this.bridge.start(agentId, { ...cfg, system, prompt, resume, engine: s.engine, model: cfg.model ?? (s.model || undefined), skills: s.skills }).catch((e: Error) => {
+    const base = cfg.lean ? `${cfg.system}\n\n${OFFICE_TALK}` : `${cfg.system}\n\n${POWERS}\n\n${OFFICE_TALK}`;
+    const system = s.frugal ? `${base}\n\n${FRUGAL}` : base;
+    const effort = s.frugal ? (cfg.effort ? FRUGAL_EFFORT[cfg.effort] ?? cfg.effort : 'medium') : cfg.effort;
+    this.bridge.start(agentId, { ...cfg, system, prompt, resume, effort, engine: s.engine, model: cfg.model ?? (s.model || undefined), skills: s.skills }).catch((e: Error) => {
       s.alive = false;
       this.note(agentId, `Couldn't start Claude Code: ${e.message}`);
     });

@@ -2,6 +2,8 @@ import { bus } from '../bus';
 import { DEFAULT_SETTINGS, engineIn, modelLabel } from '../agents/crew';
 import type { AgentActivity, Idea, Picture, Question, Settings, Team, TermEntry } from '../agents/types';
 import { addressees } from '../agents/address';
+import { capLabel, capOf, isContinue, onlyAboutUsage, parseCap, parseFrugal, release, setCap, stoppedByCap, type Cap } from '../agents/caps';
+import { OWNER } from '../owner';
 import { applyRoleOps, parseRoles, planRoles } from '../agents/roles';
 import { el } from './dom';
 import { LABEL, labelOf, type AgentView, type ApprovalView } from './hud';
@@ -252,6 +254,15 @@ class Term {
   private colorOf(id: string) {
     if (!this.colors.has(id)) this.colors.set(id, COLORS[this.colors.size % COLORS.length]);
     return this.colors.get(id)!;
+  }
+
+  /** A usage cap stopped some of the people here. */
+  capHit(hit: { id: string; cap: Cap; now: number }[]) {
+    const mine = hit.filter((h) => this.members().includes(h.id));
+    if (!mine.length) return;
+    const line = (h: (typeof hit)[number]) => `stopped: usage is at ${Math.round(h.now * 100)}% (cap ${capLabel(h.cap)}). Their work is kept; say "continue" to bring them back.`;
+    if (this.teamId) this.printEach(mine.map((h) => [h.id, line(h)]));
+    else mine.forEach((h) => this.print(line(h)));
   }
 
   /** Bring everything up to date; closes itself if the person was let go or the team disbanded. */
@@ -755,11 +766,31 @@ class Term {
     }
     // "Dana you're the manager, Bob is a worker": the office sorts the teams out, nobody is messaged
     if (!this.pics.count && this.roles(text, this.teamId ? target : ids[0])) return;
+    // "I only want Linda to respond", "I'm talking to Bob and Sam": they answer, the rest just hear it
+    const only = this.teamId && !target ? addressees(text, ids.map((id) => ({ id, name: viewOf(id)?.name ?? '' }))) : null;
+    const meant = target ? [target] : only ?? ids;
+    // stopped by a usage cap and told to carry on
+    if (isContinue(text) && stoppedByCap(meant).length) {
+      const back = release(meant);
+      this.report(back, () => 'back to work');
+      if (text.split(/\s+/).length <= 5 && !this.pics.count) return;
+    }
+    // "work until usage is at 50%", "use less usage": the office takes care of it
+    const cap = parseCap(text);
+    const frugal = parseFrugal(text);
+    if (cap) {
+      const line = setCap(meant, cap);
+      this.report(meant, () => line);
+    }
+    if (frugal !== null) {
+      meant.forEach((id) => bus.emit('agent:frugal', { id, on: frugal }));
+      this.report(meant, () => (frugal ? 'keeping usage low: lighter effort and a leaner way of working (/frugal off to undo)' : 'working normally, not saving usage'));
+    }
+    if ((cap || frugal !== null) && !this.pics.count && onlyAboutUsage(text)) return;
+    if (cap) text = `${text}\n\n(The office puts you on hold at ${capLabel(cap)} and brings you back when ${OWNER} says so; you don't need to keep track of usage.)`;
     const pictures = this.pics.take();
     if (!text && !pictures.length) return;
     text ||= 'Have a look at this picture.';
-    // "I only want Linda to respond", "I'm talking to Bob and Sam": they answer, the rest just hear it
-    const only = this.teamId && !target ? addressees(text, ids.map((id) => ({ id, name: viewOf(id)?.name ?? '' }))) : null;
     // an idea on the table: what's typed is "not that, do this instead"
     const pitch = this.pitchUp();
     if (pitch && !at && (!target || target === pitch.id) && (!only || only.includes(pitch.id))) return this.decide(false, text, pictures);
@@ -823,6 +854,8 @@ class Term {
           '/engine [name]   show or switch the engine',
           '/stop            interrupt what they are doing',
           '/hold, /reopen   put on hold, bring back',
+          '/cap 50 [week]   stop at 50% of the session (or weekly) usage until you say continue; /cap off. Or just say "work until usage is at 50%"',
+          '/frugal on|off   keep usage low (lighter effort, leaner work); or say "work more efficiently, use less usage"',
           `/role [who] manager|worker|solo  e.g. /role ${this.teamId ? 'Dana manager' : 'worker'}, or just say "Dana you're the manager, Bob and Sam are workers"`,
           '/teams           who is on which team',
           `/ideas on|off    ${this.teamId ? 'the manager pitches' : 'they pitch'} an idea after ${pitchMins} min with nothing to do`,
@@ -842,6 +875,27 @@ class Term {
       case 'interrupt':
         ids.forEach((id) => bus.emit('agent:stop', id));
         return this.report(ids, () => 'told to stop');
+      case 'cap': {
+        // /cap 50, /cap 70 week, /cap off, /cap
+        if (!arg) return this.report(ids, (v) => (capOf(v.id) ? `stops at ${capLabel(capOf(v.id)!)}` : stoppedByCap([v.id]).length ? 'stopped by a usage cap: say continue' : 'no usage cap'));
+        if (/^(off|none|no|0)$/i.test(arg)) {
+          const line = setCap(ids, null);
+          return this.report(ids, () => line);
+        }
+        const pct = Number(arg.match(/\d+/)?.[0]);
+        if (!(pct > 0 && pct <= 100)) return this.print('Usage: /cap 50 (session), /cap 70 week, /cap off');
+        const cap: Cap = { pct, window: /week|7/i.test(arg.replace(/^\d+/, '')) ? 'seven_day' : 'five_hour' };
+        const line = setCap(ids, cap);
+        return this.report(ids, () => line);
+      }
+      case 'continue':
+        if (!stoppedByCap(ids).length) return this.print('Nobody here was stopped by a usage cap. /reopen brings back anyone on hold.');
+        return this.report(release(ids), () => 'back to work');
+      case 'frugal': {
+        const on = !/^(off|no|0)$/i.test(arg);
+        ids.forEach((id) => bus.emit('agent:frugal', { id, on }));
+        return this.report(ids, () => (on ? 'keeping usage low' : 'working normally'));
+      }
       case 'hold':
       case 'reopen': {
         const on = cmd.toLowerCase() === 'hold';
@@ -888,7 +942,9 @@ class Term {
           const role = v.team ? ` · ${v.role === 'manager' ? 'manager' : 'worker'} in ${v.team}` : '';
           const doing = v.status.phase === 'idle' ? 'Idle' : LABEL[v.activity];
           const detail = v.detail && v.activity !== 'done' ? `: ${v.detail}` : '';
-          return `${doing}${detail}${where} · ${modelLabel(settings, v.status.engine, v.model)}${role}${v.status.ideas ? ' · ideas on' : ''}`;
+          const cap = capOf(v.id);
+          const usage = `${v.status.frugal ? ' · saving usage' : ''}${cap ? ` · stops at ${capLabel(cap)}` : stoppedByCap([v.id]).length ? ' · stopped by usage cap' : ''}`;
+          return `${doing}${detail}${where} · ${modelLabel(settings, v.status.engine, v.model)}${role}${v.status.ideas ? ' · ideas on' : ''}${usage}`;
         });
       case 'cost':
       case 'usage': {
@@ -995,6 +1051,7 @@ export function initTerminals() {
   // straight from the agents, without waiting for the next office update
   bus.on('term:line', (id: string) => terms.forEach((t) => t.lineAdded(id)));
   bus.on('term:live', ({ id, text }: { id: string; text: string | null }) => terms.forEach((t) => t.setLive(id, text)));
+  bus.on('cap:hit', (hit: { id: string; cap: Cap; now: number }[]) => terms.forEach((t) => t.capHit(hit)));
   window.setInterval(() => terms.forEach((t) => t.tick()), 120);
   window.addEventListener('resize', () => terms.forEach((t) => t.clamp()));
 }

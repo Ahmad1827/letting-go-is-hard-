@@ -79,6 +79,12 @@ export class Sim implements Crew {
     return [];
   }
 
+  /** Simulated staff use nothing; just noted. */
+  setFrugal(agentId: string, on: boolean) {
+    const run = this.runs.get(agentId);
+    if (run) this.note(agentId, on ? `${OWNER} asked ${run.name} to keep usage low` : `${OWNER} told ${run.name} usage doesn't need saving any more`);
+  }
+
   setIdeas(agentId: string, on: boolean) {
     const run = this.runs.get(agentId);
     if (!run || run.ideas === on) return;

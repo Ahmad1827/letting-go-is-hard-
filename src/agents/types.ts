@@ -151,6 +151,8 @@ export interface AgentStatus {
   engine: string;
   /** Ticked: when there's nothing to do they look around and pitch ideas. Unticked: they sit idle until told what to do. */
   ideas: boolean;
+  /** Asked to keep usage low. */
+  frugal?: boolean;
   /** The idea they're waiting to pitch, shown in their terminal to answer there. */
   pitch?: Idea | null;
 }

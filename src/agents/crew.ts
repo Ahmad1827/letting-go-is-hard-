@@ -22,6 +22,8 @@ export interface StaffSave {
   skills?: string[];
   /** Comes up with ideas on their own when there's nothing to do. */
   ideas?: boolean;
+  /** Asked to keep usage low. */
+  frugal?: boolean;
   usage: AgentUsage;
   seen: string[];
   phase: Phase;
@@ -107,6 +109,8 @@ export interface Crew {
   skillsOf(agentId: string): string[];
   /** Tick on: when free they look around and pitch ideas. Off: they sit idle until given something. */
   setIdeas(agentId: string, on: boolean): void;
+  /** Keep usage low (lighter effort, leaner way of working), or back to normal. */
+  setFrugal(agentId: string, on: boolean): void;
   /** Null for simulated agents, which use nothing. */
   usageOf(agentId: string): AgentUsage | null;
   setEngine(agentId: string, engine: string): void;

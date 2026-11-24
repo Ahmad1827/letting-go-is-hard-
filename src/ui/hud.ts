@@ -294,6 +294,8 @@ function initUsage() {
     if (document.visibilityState === 'visible') void refresh(10_000);
   };
   window.addEventListener('focus', back);
+  // a usage cap is set: check more often
+  bus.on('usage:refresh', () => void refresh(20_000));
   document.addEventListener('visibilitychange', back);
 
   bus.on('panel', (name: string, on: boolean) => {
