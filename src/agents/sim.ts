@@ -206,9 +206,12 @@ export class Sim implements Crew {
     this.note(agentId, `Answered: ${Object.values(answers).join(' · ')}`);
   }
 
-  sayTeam(teamId: string, text: string, pictures: Picture[] = []) {
+  sayTeam(teamId: string, text: string, pictures: Picture[] = [], only?: string[]) {
     const team = this.teams.get(teamId);
-    if (team) this.say(team.manager, text, pictures);
+    if (!team) return;
+    const meant = only?.filter((id) => id === team.manager || team.workers.includes(id));
+    if (!meant?.length) return this.say(team.manager, text, pictures);
+    meant.forEach((id) => this.say(id, text, pictures));
   }
 
   /** A risky command was approved or denied. */

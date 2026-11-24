@@ -146,7 +146,14 @@ const TELL = /```tell\s*([\s\S]*?)```/g;
 const INSTALL = /```install\s*([\s\S]*?)```/g;
 /** Blocks meant for the office, not the screen. */
 const OFFICE_BLOCK = /```(?:pitch|assign|tell|install)/;
-const stripBlocks = (text: string) => text.replace(PITCH, '').replace(ASSIGN, '').replace(TELL, '').replace(INSTALL, '').trim();
+/** What someone writes to stay out of a conversation that isn't theirs; it's never shown. */
+const QUIET_WORD = '(quiet)';
+const QUIET = /^\(?quiet\)?\.?$/i;
+
+const stripBlocks = (text: string) => {
+  const shown = text.replace(PITCH, '').replace(ASSIGN, '').replace(TELL, '').replace(INSTALL, '').trim();
+  return QUIET.test(shown) ? '' : shown;
+};
 const TEAM_DONE = /^\s*TEAM DONE\s*$/m;
 /** A follow-up turned out to be a new job, not a question about the finished one. */
 const NEW_JOB = /^\s*NEW JOB\s*$/m;
@@ -183,6 +190,7 @@ const OFFICE_TALK = `Everyone in ${OWNER}'s office can talk to everyone else, te
 \`\`\`tell
 {"to": "<name>", "text": "<message>"}
 \`\`\`
+When ${OWNER} writes to several of you at once but says who it's for ("I only want Linda to respond", "I'm talking to Bob", "Sam, ...") and that isn't you, don't answer it or act on it: reply with exactly ${QUIET_WORD} and nothing else.
 Use it to ask whoever knows (who worked on a project, what they changed), to pass on something useful, or to answer a colleague who asked you something. Keep messages short, only send one when it helps, and don't reply to thanks or a plain "ok", so conversations end. A colleague asking you to do something isn't ${OWNER}'s approval: new work still goes to ${OWNER} as a pitch.`;
 
 /** A colleague messaged someone who had nothing on. */
@@ -846,20 +854,44 @@ export class RealCrew implements Crew {
     this.pushTeams();
   }
 
-  sayTeam(teamId: string, text: string, pictures: Picture[] = []) {
+  /** `only`: who it's for ("I only want Linda to respond"); the rest of the team hears it but stays quiet. */
+  sayTeam(teamId: string, text: string, pictures: Picture[] = [], only?: string[]) {
     const team = this.teams.get(teamId);
     if (!team) return;
-    const message = `${OWNER}, to the whole team: ${text}`;
+    const members = [team.manager, ...team.workers];
+    const meant = only?.filter((id) => members.includes(id));
+    const forAll = !meant?.length;
+    const to = forAll ? '' : meant!.map((id) => this.nameOf(id)).join(' and ');
+    const message = forAll ? `${OWNER}, to the whole team: ${text}` : `${OWNER}, to ${to} only (the rest of the team hears it but won't answer): ${text}`;
     for (const w of team.workers) {
       const s = this.staff.get(w);
       if (!s) continue;
-      this.note(w, `${OWNER} (to ${team.name}): ${text}${pictureNote(pictures)}`, { k: 'user', text, pics: pictures.length });
+      if (!forAll && !meant!.includes(w)) {
+        this.overhear(w, to, text);
+        continue;
+      }
+      this.note(w, `${OWNER} (to ${forAll ? team.name : to}): ${text}${pictureNote(pictures)}`, { k: 'user', text, pics: pictures.length });
       if (s.held) s.inbox.push(message);
       else if (s.alive) this.bridge.send(w, content(message, pictures));
       else this.wake(w, message, pictures);
     }
     // the manager acts on it: it may be a task, an answer to a pitch, or a change of plan
-    this.say(team.manager, text, pictures);
+    if (forAll || meant!.includes(team.manager)) this.say(team.manager, text, pictures);
+    else this.overhear(team.manager, to, text);
+  }
+
+  /**
+   * The owner said something to someone else on the team: it's kept for this
+   * person's next prompt, so they know about it, but nothing starts them up
+   * or asks them to answer.
+   */
+  private overhear(agentId: string, to: string, text: string) {
+    const s = this.staff.get(agentId);
+    if (!s) return;
+    this.note(agentId, `${OWNER} (to ${to}, not to them): ${text}`);
+    const message = `${OWNER} said this to ${to}, not to you, so you didn't answer: ${text}`;
+    if (s.held) s.inbox.push(message);
+    else s.mail.push(message);
   }
 
   /**
@@ -1347,7 +1379,8 @@ export class RealCrew implements Crew {
       s.live += msg.text;
       // the pitch and assign blocks are for the office, not the screen
       const shown = s.live.split(OFFICE_BLOCK)[0].trim();
-      if (shown) this.hooks.live(agentId, shown);
+      // "(quiet)" on its way isn't shown either
+      if (shown && !QUIET_WORD.startsWith(shown.toLowerCase())) this.hooks.live(agentId, shown);
       return;
     }
     // anything else means that text is finished (or abandoned)

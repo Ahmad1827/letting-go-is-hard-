@@ -289,6 +289,12 @@ function initUsage() {
   };
   void refresh();
   window.setInterval(() => void refresh(), 60_000);
+  // coming back to the app (focused, restored, shown again): fresh numbers, unless they just came
+  const back = () => {
+    if (document.visibilityState === 'visible') void refresh(10_000);
+  };
+  window.addEventListener('focus', back);
+  document.addEventListener('visibilitychange', back);
 
   bus.on('panel', (name: string, on: boolean) => {
     if (name !== 'usage' || !on) return;

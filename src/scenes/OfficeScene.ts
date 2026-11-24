@@ -243,7 +243,7 @@ export class OfficeScene extends Phaser.Scene {
       this.pushApprovals();
       this.crew.answer(id, answers);
     });
-    bus.on('team:say', ({ id, text, pictures }: { id: string; text: string; pictures?: Picture[] }) => this.crew.sayTeam(id, text, pictures));
+    bus.on('team:say', ({ id, text, pictures, only }: { id: string; text: string; pictures?: Picture[]; only?: string[] }) => this.crew.sayTeam(id, text, pictures, only));
     bus.on('pitch:decide', ({ id, decision }: { id: string; decision: Decision }) => this.crew.decide(id, decision));
     bus.on('agent:say', ({ id, text, pictures }: { id: string; text: string; pictures?: Picture[] }) => this.crew.say(id, text, pictures));
     bus.on('agent:model', ({ id, model }: { id: string; model: string }) => {

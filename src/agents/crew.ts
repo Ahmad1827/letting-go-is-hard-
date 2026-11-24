@@ -127,8 +127,11 @@ export interface Crew {
   joinTeam(agentId: string, teamId: string, role: Role): void;
   /** Back to working on their own. A manager leaving breaks the team up. */
   leaveTeam(agentId: string): void;
-  /** A message from the owner to everyone on a team; the manager decides what happens next. */
-  sayTeam(teamId: string, text: string, pictures?: Picture[]): void;
+  /**
+   * A message from the owner to everyone on a team; the manager decides what happens next.
+   * With `only`, it's for those people: they answer, the rest just hear it.
+   */
+  sayTeam(teamId: string, text: string, pictures?: Picture[], only?: string[]): void;
 }
 
 /** Claude Code's models, for the built-in engine. */

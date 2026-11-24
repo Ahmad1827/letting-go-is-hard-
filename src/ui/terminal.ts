@@ -1,6 +1,7 @@
 import { bus } from '../bus';
 import { DEFAULT_SETTINGS, engineIn, modelLabel } from '../agents/crew';
 import type { AgentActivity, Idea, Picture, Question, Settings, Team, TermEntry } from '../agents/types';
+import { addressees } from '../agents/address';
 import { applyRoleOps, parseRoles, planRoles } from '../agents/roles';
 import { el } from './dom';
 import { LABEL, labelOf, type AgentView, type ApprovalView } from './hud';
@@ -603,7 +604,7 @@ class Term {
 
   private placeholder() {
     if (!this.teamId) return '';
-    return 'Message the whole team, or @name for one person';
+    return 'Message the whole team, or say who it’s for (@name, “only Linda”, “I’m talking to…”)';
   }
 
   private renderFoot(ids: string[]) {
@@ -757,12 +758,14 @@ class Term {
     const pictures = this.pics.take();
     if (!text && !pictures.length) return;
     text ||= 'Have a look at this picture.';
+    // "I only want Linda to respond", "I'm talking to Bob and Sam": they answer, the rest just hear it
+    const only = this.teamId && !target ? addressees(text, ids.map((id) => ({ id, name: viewOf(id)?.name ?? '' }))) : null;
     // an idea on the table: what's typed is "not that, do this instead"
     const pitch = this.pitchUp();
-    if (pitch && !at && (!target || target === pitch.id)) return this.decide(false, text, pictures);
+    if (pitch && !at && (!target || target === pitch.id) && (!only || only.includes(pitch.id))) return this.decide(false, text, pictures);
     // no @: the whole team hears it, and the manager decides what happens
     if (target) bus.emit('agent:say', { id: target, text, pictures });
-    else bus.emit('team:say', { id: this.teamId, text, pictures });
+    else bus.emit('team:say', { id: this.teamId, text, pictures, only: only ?? undefined });
   }
 
   /** Role changes said in words: made, with a line each, and true; false if the text isn't about roles. */
@@ -812,7 +815,7 @@ class Term {
       case '?':
         [
           'Enter sends · Shift+Enter new line · Esc interrupts · ↑ previous message · Ctrl+V pastes a picture',
-          ...(this.teamId ? ['A message goes to the whole team and the manager decides. @Name message talks to one person; @Name /command runs a command for them only.'] : []),
+          ...(this.teamId ? ['A message goes to the whole team and the manager decides. @Name message talks to one person; @Name /command runs a command for them only. Say who it’s for (“only Linda answer”, “I’m talking to Bob and Sam”, “Linda, …”) and only they reply; the rest hear it quietly.'] : []),
           `/model [name]    show or switch the model${this.teamId ? ' (each person listed)' : ''}`,
           '/status          what they are doing, where, on which model',
           '/cost            tokens and money used',
