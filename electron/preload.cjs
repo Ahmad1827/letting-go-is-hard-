@@ -21,6 +21,11 @@ contextBridge.exposeInMainWorld('office', {
   },
   /** The Claude plan's usage right now, as Claude Code's /usage shows it. */
   usage: { get: () => ipcRenderer.invoke('usage:get') },
+  /** Pictures for messages: the image on the system clipboard, or one at a web address. */
+  pictures: {
+    clipboard: () => ipcRenderer.invoke('picture:clipboard'),
+    fetch: (url) => ipcRenderer.invoke('picture:fetch', url),
+  },
   app: {
     /** Close like the window's X button would (with the background question and the goodbye). */
     close: () => ipcRenderer.send('app:close'),

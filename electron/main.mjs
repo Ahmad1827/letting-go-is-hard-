@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, shell } from 'electron';
 import { copyFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -112,6 +112,24 @@ ipcMain.handle('settings:get', () => settings());
 ipcMain.handle('settings:set', (_e, next) => saveSettings(next));
 ipcMain.handle('engine:test', (_e, engine) => testEngine(engine));
 ipcMain.handle('usage:get', () => planUsage());
+// pictures for messages: a screenshot on the system clipboard (the page's paste event can miss it),
+// and an image dragged in from a web browser, which arrives as a link rather than a file
+ipcMain.handle('picture:clipboard', () => {
+  const img = clipboard.readImage();
+  return img.isEmpty() ? null : img.toPNG();
+});
+ipcMain.handle('picture:fetch', async (_e, url) => {
+  if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return null;
+  try {
+    const res = await net.fetch(url, { signal: AbortSignal.timeout(15000) });
+    const type = res.headers.get('content-type') ?? '';
+    if (!res.ok || !type.startsWith('image/')) return null;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    return bytes.length > 25_000_000 ? null : { type, bytes };
+  } catch {
+    return null;
+  }
+});
 // who works here, remembered between runs; written synchronously so it lands even while quitting
 const memoryFile = () => path.join(app.getPath('userData'), 'office.json');
 ipcMain.handle('memory:load', () => {

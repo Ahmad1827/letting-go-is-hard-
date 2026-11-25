@@ -845,7 +845,7 @@ class Term {
       case 'help':
       case '?':
         [
-          'Enter sends · Shift+Enter new line · Esc interrupts · ↑ previous message · Ctrl+V pastes a picture',
+          'Enter sends · Shift+Enter new line · Esc interrupts · ↑ previous message · Ctrl+V or drop to add a picture',
           ...(this.teamId ? ['A message goes to the whole team and the manager decides. @Name message talks to one person; @Name /command runs a command for them only. Say who it’s for (“only Linda answer”, “I’m talking to Bob and Sam”, “Linda, …”) and only they reply; the rest hear it quietly.'] : []),
           `/model [name]    show or switch the model${this.teamId ? ' (each person listed)' : ''}`,
           '/status          what they are doing, where, on which model',
