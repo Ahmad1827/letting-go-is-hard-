@@ -35,6 +35,10 @@ export interface StaffSave {
   assignment: string | null;
   /** Their Claude Code conversation, to pick back up ('' cwd is the projects folder). */
   session?: { id: string; cwd: string } | null;
+  /** How big that conversation was, in tokens; a long one isn't picked up again. */
+  context?: number;
+  /** Worker: what they reported for their last task. */
+  lastReport?: string | null;
   /** On hold: what they were doing when the owner paused them. */
   held?: Phase | null;
   /** The job they last finished and its conversation, to be asked about later. */

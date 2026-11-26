@@ -18,7 +18,7 @@ type Msg =
   | { kind: 'assistant'; model: string; parts: ({ type: 'text'; text: string } | { type: 'tool'; id: string; name: string; input: Record<string, unknown> })[] }
   | { kind: 'results'; results: { id: string; error: boolean; text: string }[] }
   | { kind: 'permission'; requestId: string; tool: string; input: Record<string, unknown>; description: string }
-  | { kind: 'result'; ok: boolean; text: string; cost: number; tokens: number }
+  | { kind: 'result'; ok: boolean; text: string; cost: number; tokens: number; /** how big the conversation is now */ context?: number }
   | { kind: 'limits'; status?: string; windows: Record<string, UsageWindow> }
   | { kind: 'note'; text: string }
   /** Text as it's being written, a few pieces at a time; the whole message follows as 'assistant'. */
@@ -104,6 +104,18 @@ interface Staff {
   launchCwd: string;
   /** Back from a restart: the next launch in the session's folder continues that conversation. */
   resumeNext: boolean;
+  /** How big that conversation is, in tokens: past CONTEXT_CAP it isn't picked up again. */
+  context: number;
+  /** What to start a fresh conversation from when the old one is too big to pick up (their last summary). */
+  handoff: string | null;
+  /** Asked for a handover note before their conversation is swapped for a fresh one: turns ended waiting for it. */
+  handover: number;
+  /** Messages that came in during a handover, sent once the fresh conversation is up. */
+  queued: Content[];
+  /** Messages that need no answer: they go along with the next thing sent to them, instead of a turn of their own. */
+  later: string[];
+  /** Worker: what they reported for their last task, for a fresh conversation on the next one. */
+  lastReport: string | null;
   /** A resumed launch, started over fresh if the old conversation can't be opened. */
   retry: StartConfig | null;
   /** On hold: the phase they were in when paused. */
@@ -133,7 +145,7 @@ interface Staff {
 }
 
 /** A finished job: where it happened and the conversation that did it (plus the team's job, for a manager). */
-interface LastJob { idea: Idea; cwd: string; mode: string; session: { id: string; cwd: string } | null; team: string | null; job: TeamState['job'] }
+interface LastJob { idea: Idea; cwd: string; mode: string; session: { id: string; cwd: string } | null; team: string | null; job: TeamState['job']; /** what they said when they finished */ summary?: string; /** how big that conversation was */ context?: number }
 
 interface TeamState extends Team {
   /** The job: where it lives and the manager's branch the workers start from. */
@@ -147,7 +159,7 @@ const ASSIGN = /```assign\s*([\s\S]*?)```/g;
 const TELL = /```tell\s*([\s\S]*?)```/g;
 const INSTALL = /```install\s*([\s\S]*?)```/g;
 /** Blocks meant for the office, not the screen. */
-const OFFICE_BLOCK = /```(?:pitch|assign|tell|install)/;
+const OFFICE_BLOCK = /```(?:pitch|assign|tell|install|handover)/;
 /** What someone writes to stay out of a conversation that isn't theirs; it's never shown. */
 const QUIET_WORD = '(quiet)';
 const QUIET = /^\(?quiet\)?\.?$/i;
@@ -192,6 +204,7 @@ const OFFICE_TALK = `Everyone in ${OWNER}'s office can talk to everyone else, te
 \`\`\`tell
 {"to": "<name>", "text": "<message>"}
 \`\`\`
+Add "fyi": true when it needs no answer (a heads-up, a status update): they get it with their next message instead of being interrupted for it, which saves ${OWNER}'s usage.
 When ${OWNER} writes to several of you at once but says who it's for ("I only want Linda to respond", "I'm talking to Bob", "Sam, ...") and that isn't you, don't answer it or act on it: reply with exactly ${QUIET_WORD} and nothing else.
 Use it to ask whoever knows (who worked on a project, what they changed), to pass on something useful, or to answer a colleague who asked you something. Keep messages short, only send one when it helps, and don't reply to thanks or a plain "ok", so conversations end. A colleague asking you to do something isn't ${OWNER}'s approval: new work still goes to ${OWNER} as a pitch.`;
 
@@ -208,7 +221,24 @@ const FRUGAL_EFFORT: Record<string, string> = { medium: 'low' };
 const FRUGAL = `${OWNER} wants you to keep usage low. Read only the files you need (search first instead of reading whole folders, and don't re-read what you've seen), run builds and tests only when they tell you something you need, don't start subagents, keep your messages short, and take the simplest approach that does the job.`;
 
 /** Someone sending more tell blocks than this in TELL_WINDOW_MS is talking in circles: the rest are held back. */
-const TELL_LIMIT = 12;
+const TELL_LIMIT = 6;
+
+/**
+ * Every step re-reads the whole conversation, so a long one costs more on
+ * every step. Past this many tokens a conversation isn't picked up again, and
+ * someone mid-job writes a handover note and carries on in a fresh one.
+ */
+const CONTEXT_CAP = 150_000;
+const HANDOVER = /```handover\s*([\s\S]*?)```/;
+const HANDOVER_ASK = `(Office note: this conversation has got long, and every step re-reads all of it, which uses up ${OWNER}'s plan fast. You'll carry on in a fresh conversation. Write a handover note for yourself in a block like this, and nothing else:
+\`\`\`handover
+<the job, what's done (branches, commits, what each teammate did), what's left, decisions made, anything you're waiting on>
+\`\`\`
+Keep it under 400 words. Don't do anything else this turn.)`;
+const FRESH = (note: string | null) => `(This is a fresh conversation: the earlier one got too long to keep.${note ? ` Your notes from it:\n\n${note}\n\n` : ' '}Check git log, git status and the files for anything else rather than guessing.)`;
+
+/** Workers with no model picked get this one when their engine has it: building a planned piece doesn't need the biggest model. */
+const WORKER_MODEL = 'claude-sonnet-5-5';
 const TELL_WINDOW_MS = 10 * 60_000;
 
 /** Claude Code's own tools that only look. They're fine anywhere on the PC, apart from where secrets are kept. */
@@ -316,7 +346,7 @@ export class RealCrew implements Crew {
       name, phase: 'research', since: Date.now(), engine: this.settings.defaultEngine, model: this.settings.defaultModel, skills: [...(this.settings.defaultSkills ?? [])], ideas: false, frugal: false, workCwd: null, workMode: 'default', idea: null, seen: new Set(), alive: false, nudged: false, permissions: [], place: 0,
       pitched: false, orders: null, ordersPictures: [], team: null, role: null, assignment: null, desk: null,
       activity: 'idle', lastShown: 0, usage: { tokens: 0, cost: 0 }, sessionCost: 0,
-      session: null, launchCwd: '', resumeNext: false, retry: null, held: null, inbox: [], live: '', turnTokens: 0, tools: new Map(),
+      session: null, launchCwd: '', resumeNext: false, context: 0, handoff: null, handover: 0, queued: [], later: [], lastReport: null, retry: null, held: null, inbox: [], live: '', turnTokens: 0, tools: new Map(),
       mail: [], lastCfg: null, last: null, followUp: null,
     };
   }
@@ -330,7 +360,7 @@ export class RealCrew implements Crew {
         phase: s.pitched ? 'pitching' : s.phase,
         idea: noPictures(s.idea),
         work: s.workCwd ? { cwd: s.workCwd, mode: s.workMode } : null,
-        desk: s.desk, assignment: s.assignment, session: s.session, held: s.held, inbox: s.inbox, mail: s.mail, orders: s.orders, last: s.last,
+        desk: s.desk, assignment: s.assignment, session: s.session, context: s.context, lastReport: s.lastReport, held: s.held, inbox: s.inbox, mail: s.mail, orders: s.orders, last: s.last,
       })),
       teams: [...this.teams.values()].map(({ job, ...t }) => ({ ...t, job: job && { ...job, idea: noPictures(job.idea) } })),
     };
@@ -341,7 +371,7 @@ export class RealCrew implements Crew {
       this.staff.set(p.id, {
         ...this.fresh(p.name), engine: p.engine, model: p.model, skills: p.skills ?? [], ideas: p.ideas ?? false, frugal: p.frugal ?? false, usage: { ...p.usage }, seen: new Set(p.seen),
         idea: p.idea, workCwd: p.work?.cwd ?? null, workMode: p.work?.mode ?? 'default', desk: p.desk as WorkPlace | null, assignment: p.assignment,
-        session: p.session ?? null, resumeNext: !!p.session, held: p.held ?? null, inbox: p.inbox ?? [], mail: p.mail ?? [], orders: p.orders ?? null, last: (p.last as LastJob | null) ?? null,
+        session: p.session ?? null, resumeNext: !!p.session, context: p.context ?? 0, lastReport: p.lastReport ?? null, held: p.held ?? null, inbox: p.inbox ?? [], mail: p.mail ?? [], orders: p.orders ?? null, last: (p.last as LastJob | null) ?? null,
         ...(p.held ? { phase: 'held' as Phase } : {}),
       });
     }
@@ -401,7 +431,7 @@ export class RealCrew implements Crew {
     } else this.resume(agentId, phase, 'Back from hold');
     const inbox = s.inbox.splice(0);
     for (const text of inbox) {
-      if (s.alive) this.bridge.send(agentId, text);
+      if (s.alive) this.send(agentId, text);
       else this.say(agentId, text);
     }
   }
@@ -464,7 +494,7 @@ export class RealCrew implements Crew {
     else if (team) {
       team.workers = team.workers.filter((w) => w !== agentId);
       if (team.job && this.staff.get(team.manager)?.alive)
-        this.bridge.send(team.manager, `${s.name} was let go by ${OWNER}. If their part isn't merged yet, hand it to someone else or do it yourself.`);
+        this.send(team.manager, `${s.name} was let go by ${OWNER}. If their part isn't merged yet, hand it to someone else or do it yourself.`);
       this.note(team.manager, `${s.name} was let go`);
       this.pushTeams();
     }
@@ -524,7 +554,7 @@ export class RealCrew implements Crew {
   private async install(agentId: string, plugin: string, ok: boolean) {
     const s = this.staff.get(agentId)!;
     const tell = (text: string) => {
-      if (s.alive) this.bridge.send(agentId, text);
+      if (s.alive) this.send(agentId, text);
       else s.mail.push(text);
     };
     if (!ok) {
@@ -594,6 +624,12 @@ export class RealCrew implements Crew {
       this.note(agentId, `Trying "${idea.title}" again`);
       return void this.startWork(agentId, idea);
     }
+    if (s.phase === 'break' && s.alive && s.context > CONTEXT_CAP) {
+      // still chatting about the finished work, but that conversation is too long to keep going
+      this.stopProc(agentId);
+      s.alive = false;
+      if (s.last) s.last.context = s.context;
+    }
     if (s.phase === 'break' && s.alive) {
       // still chatting about the finished work: keep that session
       window.clearTimeout(s.breakTimer);
@@ -608,7 +644,7 @@ export class RealCrew implements Crew {
       s.resumeNext = !!s.session;
       return this.resume(agentId, 'stopped', 'Picking the job back up');
     }
-    if (s.alive) this.bridge.send(agentId, message);
+    if (s.alive) this.send(agentId, message);
     else if (s.role === 'worker') this.wake(agentId, `${OWNER} says: ${text}`, pictures);
     else {
       // a question or a chat gets an answer; only something to do becomes a pitch
@@ -629,13 +665,14 @@ export class RealCrew implements Crew {
     const onTask = !!(s.desk && team?.job && s.assignment);
     this.setPhase(s, onTask ? 'work' : 'standby');
     s.resumeNext = !!s.session;
+    s.handoff = s.lastReport && `What you reported for your last task:\n${short(s.lastReport, 800)}`;
     const others = team ? [team.manager, ...team.workers].filter((id) => id !== agentId).map((id) => this.nameOf(id)) : [];
     const system = onTask ? this.workerSystem(s) : WORKER_FREE_PROMPT(s.name, manager, others);
     const prompt = onTask ? `${text}\n\n(Answer that, then carry on with your task if it isn't done.)` : text;
     this.emitNow(agentId, 'thinking', 'Reading your message');
     this.launch(agentId, {
       // their worktree may be gone once the job was merged: then they start from the projects folder
-      cwd: s.desk?.cwd ?? s.session?.cwd ?? '', anywhere: true, model: s.model || undefined,
+      cwd: s.desk?.cwd ?? s.session?.cwd ?? '', anywhere: true, model: s.model || this.defaultModel(s),
       system, prompt: content(prompt, pictures), mode: this.workMode(s.desk?.mode ?? s.workMode),
       // a colleague's question between tasks only needs an answer
       ...(fromColleague && !onTask ? { effort: QUICK } : {}),
@@ -674,6 +711,8 @@ export class RealCrew implements Crew {
     s.workCwd = last.cwd;
     s.workMode = last.mode;
     s.session = last.session;
+    s.context = last.context ?? 0;
+    s.handoff = last.summary ? `What you reported when you finished it:\n${short(last.summary, 800)}` : null;
     s.resumeNext = !!last.session && last.session.cwd === last.cwd;
     this.reopenJob(s);
     const team = this.teamOf(s);
@@ -688,7 +727,7 @@ export class RealCrew implements Crew {
     const asked = s.followUp;
     s.followUp = null;
     // a resumed conversation can come back under a new id: keep the one to pick up next time
-    if (s.last && s.session?.cwd === s.last.cwd) s.last.session = s.session;
+    if (s.last && s.session?.cwd === s.last.cwd) Object.assign(s.last, { session: s.session, context: s.context });
     const team = this.teamOf(s);
     if (team && s.role === 'manager') team.job = null;
     if (NEW_JOB.test(text)) {
@@ -710,7 +749,7 @@ export class RealCrew implements Crew {
     if (!s) return;
     s.model = model;
     if (s.alive && model) this.bridge.setModel(agentId, model);
-    this.note(agentId, `Model: ${model || 'Claude Code default'}${s.alive && !model ? ' (from the next task)' : ''}`);
+    this.note(agentId, `Model: ${model || (this.defaultModel(s) ? 'Sonnet 5.5 (the default for workers)' : 'Claude Code default')}${s.alive && !model ? ' (from the next task)' : ''}`);
   }
 
   modelOf(agentId: string) {
@@ -745,7 +784,7 @@ export class RealCrew implements Crew {
     s.frugal = on;
     this.note(agentId, on ? `${OWNER} asked ${s.name} to keep usage low` : `${OWNER} told ${s.name} usage doesn't need saving any more`);
     // lighter effort comes with the next start; how to work is told now if they're running
-    if (s.alive && !s.held) this.bridge.send(agentId, on ? `${FRUGAL} This counts from now on. Reply in one line, then carry on.` : `${OWNER}: you don't need to save usage any more; work the way the job needs. Reply in one line, then carry on.`);
+    if (s.alive && !s.held) this.send(agentId, on ? `${FRUGAL} This counts from now on. Reply in one line, then carry on.` : `${OWNER}: you don't need to save usage any more; work the way the job needs. Reply in one line, then carry on.`);
   }
 
   usageOf(agentId: string) {
@@ -889,7 +928,7 @@ export class RealCrew implements Crew {
       }
       this.note(w, `${OWNER} (to ${forAll ? team.name : to}): ${text}${pictureNote(pictures)}`, { k: 'user', text, pics: pictures.length });
       if (s.held) s.inbox.push(message);
-      else if (s.alive) this.bridge.send(w, content(message, pictures));
+      else if (s.alive) this.send(w, content(message, pictures));
       else this.wake(w, message, pictures);
     }
     // the manager acts on it: it may be a task, an answer to a pitch, or a change of plan
@@ -916,7 +955,7 @@ export class RealCrew implements Crew {
    * running is started up to answer it; anyone else (held, gone home, mid-job but
    * stopped, waiting to pitch) gets it with their next prompt.
    */
-  private deliver(fromId: string, toId: string, text: string) {
+  private deliver(fromId: string, toId: string, text: string, fyi = false) {
     const s = this.staff.get(toId);
     if (!s) return;
     const from = this.nameOf(fromId);
@@ -924,7 +963,10 @@ export class RealCrew implements Crew {
     const message = `${from} (${mate ? 'teammate' : 'colleague'}) says: ${text}`;
     this.note(toId, `${from}: ${text}`, { k: 'user', from, text });
     if (s.held) s.inbox.push(message);
-    else if (s.alive) this.bridge.send(toId, message);
+    // needs no answer: it goes along with whatever they're told next
+    else if (fyi && s.alive) s.later.push(message);
+    else if (fyi) s.mail.push(message);
+    else if (s.alive) this.send(toId, message);
     else if (this.background || s.phase === 'home') s.mail.push(message);
     else if (s.role === 'worker' && this.teamOf(s)) this.wake(toId, message, [], true);
     else if ((s.phase === 'idle' || s.phase === 'break') && !s.pitched) {
@@ -956,7 +998,7 @@ export class RealCrew implements Crew {
     const everyone = [...this.staff.keys()].filter((id) => id !== agentId);
     for (const m of text.matchAll(TELL)) {
       try {
-        const raw = JSON.parse(m[1]) as { to?: string; text?: string };
+        const raw = JSON.parse(m[1]) as { to?: string; text?: string; fyi?: boolean };
         const to = String(raw.to ?? '').trim().toLowerCase().replace(/^@/, '');
         if (!raw.text) continue;
         const named = (ids: string[]) => {
@@ -968,21 +1010,21 @@ export class RealCrew implements Crew {
           : to === 'all' ? (mates.length ? mates : everyone)
           : to ? (named(mates).length ? named(mates) : named(everyone)) : [];
         if (!targets.length) {
-          this.bridge.send(agentId, `Nobody called "${raw.to}" in the office. Everyone here: ${everyone.map((id) => this.nameOf(id)).join(', ') || 'just you'}.`);
+          this.send(agentId, `Nobody called "${raw.to}" in the office. Everyone here: ${everyone.map((id) => this.nameOf(id)).join(', ') || 'just you'}.`);
           continue;
         }
         const now = Date.now();
         const recent = (this.told.get(agentId) ?? []).filter((t) => now - t < TELL_WINDOW_MS);
         if (recent.length >= TELL_LIMIT) {
           this.note(agentId, `(too many messages to colleagues; held one back)`);
-          this.bridge.send(agentId, `You've sent ${TELL_LIMIT} messages in the last few minutes, so that one wasn't delivered. Wrap the conversation up and get on with your work.`);
+          this.send(agentId, `You've sent ${TELL_LIMIT} messages in the last few minutes, so that one wasn't delivered. Wrap the conversation up and get on with your work.`);
           continue;
         }
         recent.push(now);
         this.told.set(agentId, recent);
-        for (const id of targets) this.deliver(agentId, id, raw.text);
+        for (const id of targets) this.deliver(agentId, id, raw.text, raw.fyi === true);
       } catch {
-        this.bridge.send(agentId, 'One of your tell blocks was not valid JSON. Please write it again.');
+        this.send(agentId, 'One of your tell blocks was not valid JSON. Please write it again.');
       }
     }
   }
@@ -996,13 +1038,13 @@ export class RealCrew implements Crew {
         if (!plugin || s.permissions.some((p) => p.ask?.kind === 'install' && p.ask.plugin === plugin)) continue;
         if (this.background) {
           this.note(agentId, `Wanted ${plugin}, but ${OWNER} is away`);
-          this.bridge.send(agentId, `${OWNER} is away, so ${plugin} can't be installed now. Carry on without it and mention it in your summary.`);
+          this.send(agentId, `${OWNER} is away, so ${plugin} can't be installed now. Carry on without it and mention it in your summary.`);
           continue;
         }
         const why = String(raw.why ?? '').trim();
         this.raise(agentId, s, { requestId: '', input: null, text: `install ${plugin}${why ? `: ${why}` : ''}`, ask: { kind: 'install', plugin, why } });
       } catch {
-        this.bridge.send(agentId, 'Your install block was not valid JSON. Please write it again.');
+        this.send(agentId, 'Your install block was not valid JSON. Please write it again.');
       }
     }
   }
@@ -1025,7 +1067,7 @@ export class RealCrew implements Crew {
     const s = this.staff.get(toId);
     if (!s) return;
     if (s.held) s.inbox.push(text);
-    else if (s.alive) this.bridge.send(toId, text);
+    else if (s.alive) this.send(toId, text);
     else s.mail.push(text);
   }
 
@@ -1161,6 +1203,11 @@ export class RealCrew implements Crew {
     return `\n\nThe projects, already summed up for you:\n${rows.join('\n')}`;
   }
 
+  /** No model picked: workers get the lighter one when their engine has it, everyone else Claude Code's own. */
+  private defaultModel(s: Staff) {
+    return s.role === 'worker' && engineIn(this.settings, s.engine).models.some((x) => x.id === WORKER_MODEL) ? WORKER_MODEL : undefined;
+  }
+
   /** The model for looking around for ideas: the cheap one from Settings when their engine has it. */
   private pitchModel(s: Staff) {
     const m = this.settings.pitchModel;
@@ -1218,7 +1265,7 @@ export class RealCrew implements Crew {
     s.nudged = false;
     s.pitched = false;
     this.emitNow(agentId, 'thinking');
-    if (s.alive) this.bridge.send(agentId, message);
+    if (s.alive) this.send(agentId, message);
     else if (typeof message === 'string') this.research(agentId, message);
     else this.research(agentId, ORDERS_PROMPT(s.orders ?? '', s.role === 'manager'), s.ordersPictures);
   }
@@ -1291,14 +1338,14 @@ export class RealCrew implements Crew {
       // kept for when they're reopened
       w.assignment = w.assignment ? `${w.assignment}; ${task}` : task;
       w.held = 'work';
-      this.bridge.send(team.manager, `${w.name} is on hold, so that task waits until ${OWNER} reopens them. Carry on with other work meanwhile.`);
+      this.send(team.manager, `${w.name} is on hold, so that task waits until ${OWNER} reopens them. Carry on with other work meanwhile.`);
       return;
     }
     const busy = w.assignment !== null;
     w.assignment = busy ? `${w.assignment}; ${task}` : task;
     this.setPhase(w, 'work');
     w.idea = job.idea;
-    if (busy && w.alive) return this.bridge.send(workerId, `Another task from ${this.nameOf(team.manager)}: ${task}`);
+    if (busy && w.alive) return this.send(workerId, `Another task from ${this.nameOf(team.manager)}: ${task}`);
     this.emitNow(workerId, 'thinking');
     try {
       if (!w.desk) {
@@ -1307,12 +1354,19 @@ export class RealCrew implements Crew {
         w.workCwd = w.desk.cwd;
         this.note(workerId, w.desk.note);
       }
-      const prompt = `Task from ${this.nameOf(team.manager)}: ${task}\n\nThe team's job, for context:\n${jobBrief(job.idea)}`;
-      if (w.alive) this.bridge.send(workerId, prompt);
-      else this.launch(workerId, { cwd: w.desk.cwd, model: w.model || undefined, system: this.workerSystem(w), prompt, mode: this.workMode(w.desk.mode) });
+      const before = w.lastReport ? `\n\nWhat you reported for your last task on this job (it's committed on your branch):\n${short(w.lastReport, 800)}` : '';
+      const prompt = `Task from ${this.nameOf(team.manager)}: ${task}\n\nThe team's job, for context:\n${jobBrief(job.idea)}${before}`;
+      // a new task starts a new conversation: carrying the last one along would re-read all of it on every step
+      if (w.alive) {
+        this.stopProc(workerId);
+        w.alive = false;
+      }
+      w.session = null;
+      w.resumeNext = false;
+      this.launch(workerId, { cwd: w.desk.cwd, model: w.model || this.defaultModel(w), system: this.workerSystem(w), prompt, mode: this.workMode(w.desk.mode) });
     } catch (e) {
       this.note(workerId, `Couldn't set up: ${(e as Error).message}`);
-      this.bridge.send(team.manager, `${w.name} couldn't start their task: ${(e as Error).message}`);
+      this.send(team.manager, `${w.name} couldn't start their task: ${(e as Error).message}`);
       this.standby(workerId);
     }
   }
@@ -1345,21 +1399,31 @@ export class RealCrew implements Crew {
     s.alive = true;
     s.sessionCost = 0;
     const cwd = cfg.cwd ?? '';
-    const resume = s.resumeNext && s.session?.cwd === cwd ? s.session.id : undefined;
+    let resume = s.resumeNext && s.session?.cwd === cwd ? s.session.id : undefined;
     s.resumeNext = false;
+    let start = cfg.prompt;
+    if (resume && s.context > CONTEXT_CAP) {
+      // picking that one up would re-read all of it on every step: a fresh one, with their last notes
+      resume = undefined;
+      start = withText(cfg.prompt, FRESH(s.handoff));
+      this.note(agentId, 'Starting a fresh conversation (the last one was too long to pick up)');
+    }
+    s.handoff = null;
+    if (!resume) s.context = 0;
     s.launchCwd = cwd;
     s.retry = resume ? cfg : null;
     s.lastCfg = cfg;
     // whatever teammates said while they weren't running comes first
     const mail = s.mail.splice(0);
-    const withMail = mail.length ? withText(cfg.prompt, `Messages that came in for you:\n${mail.map((m) => `- ${m}`).join('\n')}`) : cfg.prompt;
+    mail.push(...s.later.splice(0));
+    const withMail = mail.length ? withText(start, `Messages that came in for you:\n${mail.map((m) => `- ${m}`).join('\n')}`) : start;
     // who's around goes with the prompt, not the system prompt, so a changing office doesn't spoil the prompt cache
     const roster = this.roster(agentId);
     const prompt = roster ? withText(withMail, roster) : withMail;
     const base = cfg.lean ? `${cfg.system}\n\n${OFFICE_TALK}` : `${cfg.system}\n\n${POWERS}\n\n${OFFICE_TALK}`;
     const system = s.frugal ? `${base}\n\n${FRUGAL}` : base;
     const effort = s.frugal ? (cfg.effort ? FRUGAL_EFFORT[cfg.effort] ?? cfg.effort : 'medium') : cfg.effort;
-    this.bridge.start(agentId, { ...cfg, system, prompt, resume, effort, engine: s.engine, model: cfg.model ?? (s.model || undefined), skills: s.skills }).catch((e: Error) => {
+    this.bridge.start(agentId, { ...cfg, system, prompt, resume, effort, engine: s.engine, model: cfg.model ?? (s.model || this.defaultModel(s)), skills: s.skills }).catch((e: Error) => {
       s.alive = false;
       this.note(agentId, `Couldn't start Claude Code: ${e.message}`);
     });
@@ -1370,7 +1434,7 @@ export class RealCrew implements Crew {
     this.setPhase(s, 'break');
     const idea = s.idea;
     s.followUp = null;
-    if (idea) s.last = { idea: { ...idea, pictures: undefined }, cwd: s.launchCwd, mode: s.lastCfg?.mode ?? 'default', session: s.session, team: s.team, job };
+    if (idea) s.last = { idea: { ...idea, pictures: undefined }, cwd: s.launchCwd, mode: s.lastCfg?.mode ?? 'default', session: s.session, team: s.team, job, summary, context: s.context };
     this.emitNow(agentId, 'done', idea?.path ? `${idea.branch} is ready for review` : `${idea?.project} is ready`);
     if (summary) this.note(agentId, `Summary: ${short(summary, 600)}`);
     if (this.background) {
@@ -1484,10 +1548,20 @@ export class RealCrew implements Crew {
         s.usage.tokens += msg.tokens;
         s.usage.cost += Math.max(0, msg.cost - s.sessionCost);
         s.sessionCost = msg.cost;
+        if (msg.context) s.context = msg.context;
+        // the handover note itself; any other turn that ends meanwhile counts as usual
+        if (s.handover && HANDOVER.test(msg.text)) {
+          this.checkSize(agentId, s, msg);
+          break;
+        }
         this.onTurnEnd(agentId, s, msg);
+        if (this.staff.get(agentId) === s) this.checkSize(agentId, s, msg);
         break;
       case 'exit':
         s.alive = false;
+        // gone mid-handover, or with heads-ups still waiting: they come with the next start
+        if (s.handover) s.handover = 0;
+        s.mail.push(...s.later.splice(0), ...s.queued.splice(0).map((m) => (typeof m === 'string' ? m : m.map((p) => (p.type === 'text' ? p.text : '')).join(' '))).filter(Boolean));
         this.keepTurnTokens(s);
         if (s.retry) {
           // the old conversation is gone: same job, fresh conversation
@@ -1535,7 +1609,7 @@ export class RealCrew implements Crew {
         this.research(agentId);
       } else if (msg.ok && !s.nudged) {
         s.nudged = true;
-        this.bridge.send(agentId, 'Please wrap up now and end with the ```pitch block.');
+        this.send(agentId, 'Please wrap up now and end with the ```pitch block.');
       } else if (msg.ok) {
         this.note(agentId, "Couldn't come up with a pitch; taking a break");
         this.rest(agentId);
@@ -1557,10 +1631,11 @@ export class RealCrew implements Crew {
     if (team && s.role === 'worker') {
       // report back to the manager and wait for the next piece
       const done = s.assignment ?? 'their task';
+      s.lastReport = msg.text;
       const report = `${s.name} finished "${short(done, 200)}" on branch ${s.desk?.branch ?? 'the shared folder'}:\n${msg.text}`;
       const manager = this.staff.get(team.manager);
       if (manager?.held) manager.inbox.push(report);
-      else this.bridge.send(team.manager, report);
+      else this.send(team.manager, report);
       this.note(team.manager, `${s.name} reported back`, { k: 'user', from: s.name, text: msg.text || `Finished "${short(done, 200)}"` });
       this.note(agentId, `Reported to ${this.nameOf(team.manager)}`);
       this.standby(agentId);
@@ -1609,9 +1684,9 @@ export class RealCrew implements Crew {
         const raw = JSON.parse(m[1]) as { worker?: string; task?: string };
         const worker = team.workers.find((w) => this.nameOf(w).toLowerCase() === String(raw.worker ?? '').trim().toLowerCase());
         if (worker && raw.task) void this.assign(team, worker, raw.task);
-        else this.bridge.send(team.manager, `Couldn't hand that out: "${raw.worker}" isn't on your team (${team.workers.map((w) => this.nameOf(w)).join(', ')}).`);
+        else this.send(team.manager, `Couldn't hand that out: "${raw.worker}" isn't on your team (${team.workers.map((w) => this.nameOf(w)).join(', ')}).`);
       } catch {
-        this.bridge.send(team.manager, 'One of your assign blocks was not valid JSON. Please write it again.');
+        this.send(team.manager, 'One of your assign blocks was not valid JSON. Please write it again.');
       }
     }
   }
@@ -1660,6 +1735,50 @@ export class RealCrew implements Crew {
   }
 
   /** Stop their Claude Code process, and drop any half-written text from their terminal. */
+  /** Everything said to a running agent goes through here. */
+  private send(agentId: string, message: Content) {
+    const s = this.staff.get(agentId);
+    if (!s) return;
+    // swapping conversations: it waits for the fresh one
+    if (s.handover) return void s.queued.push(message);
+    const later = s.later.splice(0);
+    this.bridge.send(agentId, later.length ? withText(message, `(Also, for your information: ${later.join(' | ')})`) : message);
+  }
+
+  /** Their conversation is too long to carry on: get a handover note, then carry on in a fresh one. */
+  private checkSize(agentId: string, s: Staff, msg: Extract<Msg, { kind: 'result' }>) {
+    if (s.handover && (s.phase !== 'work' || !s.alive)) {
+      // the job ended in the meantime: no need for a fresh conversation
+      s.handover = 0;
+      return this.flushQueued(agentId, s);
+    }
+    if (s.handover) {
+      const note = HANDOVER.exec(msg.text)?.[1]?.trim();
+      // a turn that was already queued can end first; give it a couple of goes
+      if (!note && ++s.handover <= 3) return;
+      s.handover = 0;
+      const cfg = s.lastCfg;
+      if (!note || !cfg || !s.alive) return this.flushQueued(agentId, s);
+      this.stopProc(agentId);
+      s.alive = false;
+      s.session = null;
+      s.resumeNext = false;
+      this.note(agentId, 'Their conversation got long; carrying on in a fresh one from their handover note');
+      this.launch(agentId, { ...cfg, prompt: `${FRESH(note)}\n\nCarry on from there.` });
+      return this.flushQueued(agentId, s);
+    }
+    if (!msg.ok || !s.alive || s.phase !== 'work' || (msg.context ?? 0) <= CONTEXT_CAP || s.permissions.length) return;
+    s.handover = 1;
+    this.bridge.send(agentId, HANDOVER_ASK);
+  }
+
+  private flushQueued(agentId: string, s: Staff) {
+    const q = s.queued.splice(0);
+    if (!q.length) return;
+    if (q.every((m) => typeof m === 'string')) this.send(agentId, q.join('\n\n'));
+    else for (const m of q) this.send(agentId, m);
+  }
+
   private stopProc(agentId: string) {
     this.bridge.stop(agentId);
     this.clearLive(agentId);

@@ -131,6 +131,8 @@ const CHARS_PER_TOKEN = 4;
  */
 function turnTally() {
   let done = 0, input = 0, output = 0, chars = 0, thinking = 0;
+  // how big the conversation is: the latest model call's whole input, kept across turns
+  let context = 0;
   const inputOf = (u) => (u?.input_tokens ?? 0) + (u?.cache_creation_input_tokens ?? 0) + (u?.cache_read_input_tokens ?? 0);
   return {
     /** Takes a stream-json event; true if the count changed. */
@@ -139,6 +141,7 @@ function turnTally() {
       const e = m.event;
       if (e?.type === 'message_start') {
         input = inputOf(e.message?.usage);
+        context = input;
         output = e.message?.usage?.output_tokens ?? 0;
         chars = thinking = 0;
         return true;
@@ -159,6 +162,7 @@ function turnTally() {
       }
       return false;
     },
+    context: () => context,
     total: () => done + input + Math.max(output, Math.round(chars / CHARS_PER_TOKEN) + thinking),
     reset() {
       done = input = output = chars = thinking = 0;
@@ -279,6 +283,7 @@ export function setupAgents(ipcMain, getWindow) {
       }
       if (m.type === 'system' && m.subtype === 'init' && m.session_id) rememberBrief(m.session_id, hash);
       if (tally.see(m)) tallyTimer ??= setTimeout(sendTally, USAGE_MS);
+      const context = tally.context();
       // the turn's real total comes with the result; the running count starts over
       if (m.type === 'result') {
         clearTimeout(tallyTimer);
@@ -292,6 +297,7 @@ export function setupAgents(ipcMain, getWindow) {
       }
       const out = slim(m);
       if (!out) return;
+      if (out.kind === 'result') out.context = context;
       if (out.kind === 'delta') {
         text += out.text;
         timer ??= setTimeout(flush, DELTA_MS);
