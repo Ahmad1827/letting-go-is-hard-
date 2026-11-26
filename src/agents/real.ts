@@ -229,6 +229,8 @@ const TELL_LIMIT = 6;
  * someone mid-job writes a handover note and carries on in a fresh one.
  */
 const CONTEXT_CAP = 150_000;
+/** A conversation saved before sizes were kept: it could be any size, so it isn't picked up again. */
+const UNKNOWN = CONTEXT_CAP + 1;
 const HANDOVER = /```handover\s*([\s\S]*?)```/;
 const HANDOVER_ASK = `(Office note: this conversation has got long, and every step re-reads all of it, which uses up ${OWNER}'s plan fast. You'll carry on in a fresh conversation. Write a handover note for yourself in a block like this, and nothing else:
 \`\`\`handover
@@ -371,7 +373,7 @@ export class RealCrew implements Crew {
       this.staff.set(p.id, {
         ...this.fresh(p.name), engine: p.engine, model: p.model, skills: p.skills ?? [], ideas: p.ideas ?? false, frugal: p.frugal ?? false, usage: { ...p.usage }, seen: new Set(p.seen),
         idea: p.idea, workCwd: p.work?.cwd ?? null, workMode: p.work?.mode ?? 'default', desk: p.desk as WorkPlace | null, assignment: p.assignment,
-        session: p.session ?? null, resumeNext: !!p.session, context: p.context ?? 0, lastReport: p.lastReport ?? null, held: p.held ?? null, inbox: p.inbox ?? [], mail: p.mail ?? [], orders: p.orders ?? null, last: (p.last as LastJob | null) ?? null,
+        session: p.session ?? null, resumeNext: !!p.session, context: p.context ?? UNKNOWN, lastReport: p.lastReport ?? null, held: p.held ?? null, inbox: p.inbox ?? [], mail: p.mail ?? [], orders: p.orders ?? null, last: (p.last as LastJob | null) ?? null,
         ...(p.held ? { phase: 'held' as Phase } : {}),
       });
     }
@@ -711,7 +713,7 @@ export class RealCrew implements Crew {
     s.workCwd = last.cwd;
     s.workMode = last.mode;
     s.session = last.session;
-    s.context = last.context ?? 0;
+    s.context = last.context ?? UNKNOWN;
     s.handoff = last.summary ? `What you reported when you finished it:\n${short(last.summary, 800)}` : null;
     s.resumeNext = !!last.session && last.session.cwd === last.cwd;
     this.reopenJob(s);
