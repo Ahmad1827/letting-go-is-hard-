@@ -6,7 +6,7 @@ import { capLabel, capOf, isContinue, onlyAboutUsage, parseCap, parseFrugal, rel
 import { OWNER } from '../owner';
 import { applyRoleOps, parseRoles, planRoles } from '../agents/roles';
 import { el } from './dom';
-import { LABEL, labelOf, type AgentView, type ApprovalView } from './hud';
+import { labelOf, type AgentView, type ApprovalView } from './hud';
 import { raise } from './panels';
 import { acceptPictures } from './paste';
 import { pixelArt, savedTheme, setTheme, THEMES, type TermTheme } from './pixels';
@@ -940,7 +940,7 @@ class Term {
         return this.report(ids, (v) => {
           const where = v.status.project ? ` · ${v.status.project}${v.status.branch ? ` (${v.status.branch})` : ''}` : '';
           const role = v.team ? ` · ${v.role === 'manager' ? 'manager' : 'worker'} in ${v.team}` : '';
-          const doing = v.status.phase === 'idle' ? 'Idle' : LABEL[v.activity];
+          const doing = labelOf(v);
           const detail = v.detail && v.activity !== 'done' ? `: ${v.detail}` : '';
           const cap = capOf(v.id);
           const usage = `${v.status.frugal ? ' · saving usage' : ''}${cap ? ` · stops at ${capLabel(cap)}` : stoppedByCap([v.id]).length ? ' · stopped by usage cap' : ''}`;

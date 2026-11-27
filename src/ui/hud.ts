@@ -54,8 +54,8 @@ export const LABEL: Record<AgentActivity, string> = {
   standby: 'Waiting for a task',
 };
 
-/** What they're doing, in a word: "Idle" rather than "On break" when they've simply nothing to do. */
-export const labelOf = (a: AgentView) => (a.status.phase === 'idle' ? 'Idle' : LABEL[a.activity]);
+/** What they're doing, in a word: "Idle" rather than "On break" when they've simply nothing to do, "On hold" when they're held. */
+export const labelOf = (a: AgentView) => (a.status.phase === 'idle' ? 'Idle' : a.status.phase === 'held' ? 'On hold' : LABEL[a.activity]);
 
 export const DOT: Record<AgentActivity, string> = {
   idle: '#808080',

@@ -25,7 +25,9 @@ type Msg =
   | { kind: 'delta'; text: string }
   /** Tokens used so far in the turn that's under way (partly estimated); the result has the real total. */
   | { kind: 'usage'; tokens: number }
-  | { kind: 'exit'; code: number; error?: string; /** Claude Code's login ran out */ signedOut?: boolean };
+  | { kind: 'exit'; code: number; error?: string; /** Claude Code's login ran out */ signedOut?: boolean }
+  /** the owner signed Claude Code in again from the app (sent to everyone, as agent '*') */
+  | { kind: 'signedIn' };
 
 /** A user message: plain text, or text with pictures. */
 type Content = string | ({ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } })[];
@@ -331,6 +333,8 @@ export class RealCrew implements Crew {
   private background = false;
   projects: ProjectInfo[] = [];
   private staff = new Map<string, Staff>();
+  /** Put on hold because Claude Code was signed out: back to work once it's signed in again. */
+  private heldForLogin = new Set<string>();
   private teams = new Map<string, TeamState>();
   private line: string[] = [];
 
@@ -424,13 +428,32 @@ export class RealCrew implements Crew {
    * forever, the whole office goes on hold until the owner signs in and reopens them.
    */
   private signedOut(agentId: string) {
-    this.note(agentId, 'Claude Code is signed out: run `claude auth login`, then take everyone off hold');
-    for (const [id, s] of this.staff) if (s.phase !== 'home') this.hold(id, `Claude Code is signed out: {name} is on hold until you sign in again`);
+    this.note(agentId, 'Claude Code is signed out');
+    for (const [id, s] of this.staff)
+      if (s.phase !== 'home' && !s.held) {
+        this.hold(id, 'Claude Code is signed out: {name} is on hold until you sign in again');
+        this.heldForLogin.add(id);
+      }
+  }
+
+  /** Signed in again: whoever was put on hold for it goes back to what they were doing (anyone the owner held stays held). */
+  private signedIn() {
+    const ids = [...this.heldForLogin];
+    this.heldForLogin.clear();
+    ids.forEach((id, i) =>
+      window.setTimeout(() => {
+        const s = this.staff.get(id);
+        if (!s?.held) return;
+        this.note(id, `Signed in again: ${s.name} is back to work`);
+        this.unhold(id);
+      }, i * 1500),
+    );
   }
 
   unhold(agentId: string) {
     const s = this.staff.get(agentId);
     if (!s?.held) return;
+    this.heldForLogin.delete(agentId);
     const phase = s.held;
     s.held = null;
     s.resumeNext = !!s.session;
@@ -1463,6 +1486,7 @@ export class RealCrew implements Crew {
   // ---------------------------------------------------------------- events from Claude Code
 
   private onMessage(agentId: string, msg: Msg) {
+    if (msg.kind === 'signedIn') return this.signedIn();
     const s = this.staff.get(agentId);
     if (!s || s.held) return; // on hold: whatever was still on its way is dropped
     if (msg.kind === 'usage') {

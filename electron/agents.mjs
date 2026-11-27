@@ -217,24 +217,80 @@ function slim(m) {
 export function setupAgents(ipcMain, getWindow) {
   const emit = (id, msg) => getWindow()?.webContents.send('agent:msg', id, msg);
 
-  /** Tell the owner once (not once per agent) that Claude Code needs them to sign in again. */
+  /**
+   * Tell the owner once (not once per agent) that Claude Code needs them to sign
+   * in again, and offer to do it for them: "Sign in" runs Claude Code's own login,
+   * which opens the browser, and once they've approved it there everyone who was
+   * put on hold for it goes back to work by themselves.
+   */
   let warnedAt = 0;
-  function signedOut(eng) {
-    if (Date.now() - warnedAt < 60_000) return;
+  let signingIn = false;
+  async function signedOut(eng) {
+    if (signingIn || Date.now() - warnedAt < 60_000) return;
     warnedAt = Date.now();
     const win = getWindow();
     if (!win) return;
-    const dir = eng.env?.CLAUDE_CONFIG_DIR;
-    void dialog.showMessageBox(win, {
+    const { response } = await dialog.showMessageBox(win, {
       type: 'warning',
       title: 'Letting Go Is Hard',
       message: `${eng.name} is signed out`,
       detail:
-        `Its login ran out, so the agents can't do anything and have been put on hold. Sign in again in a terminal:\n\n` +
-        `    ${dir ? `CLAUDE_CONFIG_DIR="${dir}" ` : ''}${eng.command} auth login\n\n` +
-        `Then select the agents and take them off hold. They pick up where they stopped.`,
-      buttons: ['OK'],
+        "Its login ran out, so the agents can't do anything and have been put on hold.\n\n" +
+        'Click "Sign in": your browser opens a Claude page, you click Authorize there, and everyone goes back to work by themselves.',
+      buttons: ['Sign in', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
     });
+    if (response === 0) void signIn(eng);
+  }
+
+  /** Run `claude auth login` for the engine's account and wait for the owner to approve it in the browser. */
+  async function signIn(eng) {
+    if (signingIn) return;
+    signingIn = true;
+    const launch = launchOf(eng);
+    const { ok, error } = await new Promise((done) => {
+      let out = '';
+      let p;
+      try {
+        p = spawn(launch.file, [...launch.pre, 'auth', 'login'], { cwd: launch.cwd, env: launch.env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      } catch (e) {
+        return done({ ok: false, error: e.message });
+      }
+      // nobody approves it in the browser: give up rather than leave it waiting forever
+      const timer = setTimeout(() => p.kill(), 10 * 60_000);
+      const take = (d) => (out = (out + d).slice(-4000));
+      p.stdout.on('data', take);
+      p.stderr.on('data', take);
+      p.on('error', (e) => {
+        clearTimeout(timer);
+        done({ ok: false, error: e.message });
+      });
+      p.on('exit', (code) => {
+        clearTimeout(timer);
+        // eslint-disable-next-line no-control-regex
+        const last = out.replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b\[[0-9;]*m/g, '').trim().split('\n').pop() ?? '';
+        done({ ok: code === 0, error: code === null ? 'it took too long' : last });
+      });
+    });
+    signingIn = false;
+    warnedAt = 0;
+    const win = getWindow();
+    if (ok) {
+      emit('*', { kind: 'signedIn' });
+      return;
+    }
+    if (!win) return;
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'error',
+      title: 'Letting Go Is Hard',
+      message: "Signing in didn't finish",
+      detail: `${error ? `${eng.name} said: ${error}\n\n` : ''}The agents stay on hold until you sign in.`,
+      buttons: ['Try again', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response === 0) void signIn(eng);
   }
 
   /** How to run an engine, and where to look when asking it about itself. */
@@ -324,7 +380,7 @@ export function setupAgents(ipcMain, getWindow) {
       const out = slim(m);
       if (!out) return;
       if (out.kind === 'result') out.context = context;
-      if (out.kind === 'result' && out.signedOut) signedOut(eng);
+      if (out.kind === 'result' && out.signedOut) void signedOut(eng);
       if (out.kind === 'delta') {
         text += out.text;
         timer ??= setTimeout(flush, DELTA_MS);
@@ -343,7 +399,7 @@ export function setupAgents(ipcMain, getWindow) {
       if (entry.closed) return;
       const error = code ? err.trim().split('\n').pop() : '';
       const out = !!code && SIGNED_OUT.test(err);
-      if (out) signedOut(eng);
+      if (out) void signedOut(eng);
       emit(id, { kind: 'exit', code, error, signedOut: out });
     });
     for (const line of entry.pending.splice(0)) p.stdin.write(line);
