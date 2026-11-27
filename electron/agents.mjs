@@ -10,7 +10,7 @@ import { existsSync, promises as fs, readFileSync, writeFileSync } from 'node:fs
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
-import { app } from 'electron';
+import { app, dialog } from 'electron';
 import { engine, settings } from './settings.mjs';
 import { appsBrief } from './apps.mjs';
 import { pcBrief } from './pc.mjs';
@@ -170,6 +170,9 @@ function turnTally() {
   };
 }
 
+/** What Claude Code says when its login has run out or is missing: nothing works until the owner signs in again. */
+const SIGNED_OUT = /failed to authenticate|claude auth login|please run \/login|oauth token (has )?expired|not logged in|invalid api key/i;
+
 /** Keep only what the office needs from each stream-json event. */
 function slim(m) {
   // a piece of text as it's being written (only theirs, not a subagent's); usage is counted separately
@@ -201,7 +204,10 @@ function slim(m) {
     const u = m.usage ?? {};
     const tokens = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.output_tokens ?? 0);
     // cost is cumulative for the session, tokens are for this turn only
-    return { kind: 'result', ok: m.subtype === 'success', text: m.result ?? '', cost: m.total_cost_usd ?? 0, tokens };
+    // flagged as an error, or the bare error as the whole reply (it can come back as a "successful" turn)
+    const said = m.result ?? '';
+    const signedOut = (!!m.is_error || m.subtype !== 'success' || /^failed to authenticate/i.test(said.trim())) && SIGNED_OUT.test(said);
+    return { kind: 'result', ok: m.subtype === 'success', text: m.result ?? '', cost: m.total_cost_usd ?? 0, tokens, signedOut };
   }
   // the plan's usage windows (5-hour, weekly), as fractions of the limit
   if (m.type === 'rate_limit_event') return { kind: 'limits', status: m.rate_limit_info?.status, windows: m.rate_limit_info?.unifiedWindows ?? {} };
@@ -210,6 +216,26 @@ function slim(m) {
 
 export function setupAgents(ipcMain, getWindow) {
   const emit = (id, msg) => getWindow()?.webContents.send('agent:msg', id, msg);
+
+  /** Tell the owner once (not once per agent) that Claude Code needs them to sign in again. */
+  let warnedAt = 0;
+  function signedOut(eng) {
+    if (Date.now() - warnedAt < 60_000) return;
+    warnedAt = Date.now();
+    const win = getWindow();
+    if (!win) return;
+    const dir = eng.env?.CLAUDE_CONFIG_DIR;
+    void dialog.showMessageBox(win, {
+      type: 'warning',
+      title: 'Letting Go Is Hard',
+      message: `${eng.name} is signed out`,
+      detail:
+        `Its login ran out, so the agents can't do anything and have been put on hold. Sign in again in a terminal:\n\n` +
+        `    ${dir ? `CLAUDE_CONFIG_DIR="${dir}" ` : ''}${eng.command} auth login\n\n` +
+        `Then select the agents and take them off hold. They pick up where they stopped.`,
+      buttons: ['OK'],
+    });
+  }
 
   /** How to run an engine, and where to look when asking it about itself. */
   function launchOf(eng) {
@@ -298,6 +324,7 @@ export function setupAgents(ipcMain, getWindow) {
       const out = slim(m);
       if (!out) return;
       if (out.kind === 'result') out.context = context;
+      if (out.kind === 'result' && out.signedOut) signedOut(eng);
       if (out.kind === 'delta') {
         text += out.text;
         timer ??= setTimeout(flush, DELTA_MS);
@@ -313,7 +340,11 @@ export function setupAgents(ipcMain, getWindow) {
       flush();
       clearTimeout(tallyTimer);
       if (procs.get(id) === entry) procs.delete(id);
-      if (!entry.closed) emit(id, { kind: 'exit', code, error: code ? err.trim().split('\n').pop() : '' });
+      if (entry.closed) return;
+      const error = code ? err.trim().split('\n').pop() : '';
+      const out = !!code && SIGNED_OUT.test(err);
+      if (out) signedOut(eng);
+      emit(id, { kind: 'exit', code, error, signedOut: out });
     });
     for (const line of entry.pending.splice(0)) p.stdin.write(line);
   }

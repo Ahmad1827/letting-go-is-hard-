@@ -18,14 +18,14 @@ type Msg =
   | { kind: 'assistant'; model: string; parts: ({ type: 'text'; text: string } | { type: 'tool'; id: string; name: string; input: Record<string, unknown> })[] }
   | { kind: 'results'; results: { id: string; error: boolean; text: string }[] }
   | { kind: 'permission'; requestId: string; tool: string; input: Record<string, unknown>; description: string }
-  | { kind: 'result'; ok: boolean; text: string; cost: number; tokens: number; /** how big the conversation is now */ context?: number }
+  | { kind: 'result'; ok: boolean; text: string; cost: number; tokens: number; /** how big the conversation is now */ context?: number; /** Claude Code's login ran out */ signedOut?: boolean }
   | { kind: 'limits'; status?: string; windows: Record<string, UsageWindow> }
   | { kind: 'note'; text: string }
   /** Text as it's being written, a few pieces at a time; the whole message follows as 'assistant'. */
   | { kind: 'delta'; text: string }
   /** Tokens used so far in the turn that's under way (partly estimated); the result has the real total. */
   | { kind: 'usage'; tokens: number }
-  | { kind: 'exit'; code: number; error?: string };
+  | { kind: 'exit'; code: number; error?: string; /** Claude Code's login ran out */ signedOut?: boolean };
 
 /** A user message: plain text, or text with pictures. */
 type Content = string | ({ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } })[];
@@ -397,7 +397,7 @@ export class RealCrew implements Crew {
     );
   }
 
-  hold(agentId: string) {
+  hold(agentId: string, why = `${OWNER} put {name} on hold`) {
     const s = this.staff.get(agentId);
     if (!s || s.held) return;
     s.held = s.pitched ? 'pitching' : s.phase;
@@ -413,9 +413,19 @@ export class RealCrew implements Crew {
     s.permissions = [];
     if (this.line.includes(agentId)) this.leaveLine(agentId);
     this.setPhase(s, 'held');
-    this.note(agentId, `${OWNER} put ${s.name} on hold`);
+    this.note(agentId, why.replace('{name}', s.name));
     this.emitNow(agentId, 'idle', 'On hold');
     this.checkAllDone();
+  }
+
+  /**
+   * Claude Code is signed out, so every call anyone makes fails the same way.
+   * Rather than each of them getting the error, taking a break and trying again
+   * forever, the whole office goes on hold until the owner signs in and reopens them.
+   */
+  private signedOut(agentId: string) {
+    this.note(agentId, 'Claude Code is signed out: run `claude auth login`, then take everyone off hold');
+    for (const [id, s] of this.staff) if (s.phase !== 'home') this.hold(id, `Claude Code is signed out: {name} is on hold until you sign in again`);
   }
 
   unhold(agentId: string) {
@@ -1546,6 +1556,7 @@ export class RealCrew implements Crew {
         break;
       case 'result':
         s.turnTokens = 0;
+        if (msg.signedOut) return this.signedOut(agentId);
         if (s.retry) break; // a resume that never got going; its exit starts a fresh one
         s.usage.tokens += msg.tokens;
         s.usage.cost += Math.max(0, msg.cost - s.sessionCost);
@@ -1565,6 +1576,7 @@ export class RealCrew implements Crew {
         if (s.handover) s.handover = 0;
         s.mail.push(...s.later.splice(0), ...s.queued.splice(0).map((m) => (typeof m === 'string' ? m : m.map((p) => (p.type === 'text' ? p.text : '')).join(' '))).filter(Boolean));
         this.keepTurnTokens(s);
+        if (msg.signedOut) return this.signedOut(agentId);
         if (s.retry) {
           // the old conversation is gone: same job, fresh conversation
           const cfg = s.retry;
