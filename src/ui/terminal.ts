@@ -994,8 +994,9 @@ class Term {
 }
 
 /** A terminal for the terminal view, laid out by it: one person (agentId) or a team. */
-export function dockTerm(parent: HTMLElement, agentId: string | null, teamId: string | null) {
-  const key = `d:${agentId ? `a:${agentId}` : `t:${teamId}`}`;
+/** `tag` keeps it apart from other docked terminals for the same person (the shell tab shows one too). */
+export function dockTerm(parent: HTMLElement, agentId: string | null, teamId: string | null, tag = '') {
+  const key = `d${tag}:${agentId ? `a:${agentId}` : `t:${teamId}`}`;
   terms.get(key)?.close();
   const t = new Term(key, agentId, teamId, parent);
   terms.set(key, t);

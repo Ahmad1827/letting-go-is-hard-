@@ -122,6 +122,13 @@ permission prompts:
 **Pictures:** paste (Ctrl+V) or drop pictures into an agent's message box, the "do this
 instead" box on a pitch, or a new team's task. They go to Claude along with your words.
 
+**Shell:** the first tab in the terminal view is a real terminal: bash in WSL on Windows
+(it needs `python3` there, which Ubuntu has), so `cd`, `ls` and everything else work.
+`claude linda` or `claude team alpha` opens that person's or team's terminal right in the tab;
+`claude` on its own runs Claude Code in the current folder. Only Ctrl+C ends either one: if
+Claude Code exits by itself it picks the conversation back up. Right-click a person's tab to
+fire them, or a team's to disband it.
+
 **Music:** lo-fi office music plays in the background, generated live in the app (no audio
 files). Turn it off or change the volume in the *Music* panel; it remembers your choice.
 

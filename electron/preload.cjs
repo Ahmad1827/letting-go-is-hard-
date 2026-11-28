@@ -38,6 +38,18 @@ contextBridge.exposeInMainWorld('office', {
     /** Everyone has finished while in the background. */
     allDone: () => ipcRenderer.send('app:all-done'),
   },
+  /** A real shell (bash in WSL on Windows) for the terminal view. */
+  shell: {
+    start: (id, cols, rows) => ipcRenderer.invoke('shell:start', id, cols, rows),
+    input: (id, text) => ipcRenderer.send('shell:input', id, text),
+    resize: (id, cols, rows) => ipcRenderer.send('shell:resize', id, cols, rows),
+    /** Who `claude <name>` can open: everyone's name and every team's. */
+    names: (id, names) => ipcRenderer.send('shell:names', id, names),
+    /** End the Claude Code session running in it (Ctrl+C in the tab). */
+    stop: (id) => ipcRenderer.send('shell:stop', id),
+    onData: (cb) => ipcRenderer.on('shell:data', (_e, id, data) => cb(id, data)),
+    onExit: (cb) => ipcRenderer.on('shell:exit', (_e, id, code) => cb(id, code)),
+  },
   agents: {
     start: (id, cfg) => ipcRenderer.invoke('agent:start', id, cfg),
     send: (id, text) => ipcRenderer.send('agent:send', id, text),

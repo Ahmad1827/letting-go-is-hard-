@@ -6,6 +6,7 @@ import { setupAgents } from './agents.mjs';
 import { findApps } from './apps.mjs';
 import { startScreen } from './screen.mjs';
 import { listProjects } from './projects.mjs';
+import { setupShell } from './shell.mjs';
 import { loadSettings, saveSettings, settings, testEngine } from './settings.mjs';
 import { planUsage } from './usage.mjs';
 
@@ -157,7 +158,11 @@ ipcMain.on('app:all-done', () => {
   if (inBackground) goodbye();
 });
 const agents = setupAgents(ipcMain, () => win);
-app.on('before-quit', () => agents.stopAll());
+const shells = setupShell(ipcMain, () => win);
+app.on('before-quit', () => {
+  agents.stopAll();
+  shells.stopAll();
+});
 
 app.on('second-instance', () => {
   if (!win) return;

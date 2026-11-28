@@ -222,6 +222,9 @@ const QUICK = 'medium';
 const FRUGAL_EFFORT: Record<string, string> = { medium: 'low' };
 const FRUGAL = `${OWNER} wants you to keep usage low. Read only the files you need (search first instead of reading whole folders, and don't re-read what you've seen), run builds and tests only when they tell you something you need, don't start subagents, keep your messages short, and take the simplest approach that does the job.`;
 
+/** How everyone writes to the owner, told to all of them: they read a lot of terminals at once. */
+const TERSE = `How to write to ${OWNER}: they read many terminals at once, so be brief. Lead with the answer or the result in one line, then at most 3-5 short bullets if needed. No preamble, no recap of what you said before, no commit hashes, file lists or test counts unless asked; say only what ${OWNER} needs to know or check. Summaries when you finish follow the same rule.`;
+
 /** Someone sending more tell blocks than this in TELL_WINDOW_MS is talking in circles: the rest are held back. */
 const TELL_LIMIT = 6;
 
@@ -230,7 +233,7 @@ const TELL_LIMIT = 6;
  * every step. Past this many tokens a conversation isn't picked up again, and
  * someone mid-job writes a handover note and carries on in a fresh one.
  */
-const CONTEXT_CAP = 150_000;
+const CONTEXT_CAP = 100_000;
 /** A conversation saved before sizes were kept: it could be any size, so it isn't picked up again. */
 const UNKNOWN = CONTEXT_CAP + 1;
 const HANDOVER = /```handover\s*([\s\S]*?)```/;
@@ -1455,7 +1458,7 @@ export class RealCrew implements Crew {
     // who's around goes with the prompt, not the system prompt, so a changing office doesn't spoil the prompt cache
     const roster = this.roster(agentId);
     const prompt = roster ? withText(withMail, roster) : withMail;
-    const base = cfg.lean ? `${cfg.system}\n\n${OFFICE_TALK}` : `${cfg.system}\n\n${POWERS}\n\n${OFFICE_TALK}`;
+    const base = cfg.lean ? `${cfg.system}\n\n${OFFICE_TALK}\n\n${TERSE}` : `${cfg.system}\n\n${POWERS}\n\n${OFFICE_TALK}\n\n${TERSE}`;
     const system = s.frugal ? `${base}\n\n${FRUGAL}` : base;
     const effort = s.frugal ? (cfg.effort ? FRUGAL_EFFORT[cfg.effort] ?? cfg.effort : 'medium') : cfg.effort;
     this.bridge.start(agentId, { ...cfg, system, prompt, resume, effort, engine: s.engine, model: cfg.model ?? (s.model || this.defaultModel(s)), skills: s.skills }).catch((e: Error) => {

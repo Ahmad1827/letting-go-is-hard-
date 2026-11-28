@@ -517,6 +517,28 @@ select.role-pick option { text-transform: none; color: var(--ink); background: v
 /* lights out: the panels slide away so the floor goes dark on its own */
 #dock, #windows, #zoombar { transition: transform 0.6s cubic-bezier(0.6, 0, 0.9, 0.4), opacity 0.6s; }
 body.leaving #dock { transform: translateY(-160%); opacity: 0; }
+/* the shell tab: a real terminal; someone's office terminal opens over it */
+.shell-tile { display: flex; flex-direction: column; background: var(--t-bg); border: 1px solid var(--t-border); }
+.shell-tile .term-bar { align-items: center; gap: 12px; height: 28px; }
+.shell-tile .term-tab { color: var(--t-ink); font-weight: bold; }
+.shell-tip { color: var(--t-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.shell-win { position: relative; flex: 1; min-height: 0; }
+.shell-screen { position: absolute; inset: 0; padding: 6px 0 0 8px; }
+.shell-screen .xterm { height: 100%; }
+.shell-screen .xterm-viewport { scrollbar-width: thin; scrollbar-color: var(--t-rule) transparent; }
+.tile:not(.big) .shell-win { pointer-events: none; }
+.shell-over { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--t-bg); z-index: 2; }
+.shell-over[hidden] { display: none; }
+.shell-over .term-win.docked { position: relative; flex: 1; min-height: 0; width: 100%; height: auto; max-width: none; resize: none; animation: none; border: none; }
+.shell-over .term-bar { display: none; }
+.shell-hint { flex: none; padding: 3px 10px; color: var(--t-dim); background: var(--t-bar); border-bottom: 1px solid var(--t-line); }
+
+/* right-click on a tab */
+.deck-menu { position: fixed; z-index: 40; display: flex; flex-direction: column; min-width: 160px; padding: 3px; background: var(--t-bar); border: 1px solid var(--t-line); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); font: 12.5px/1.4 'Cascadia Mono', Consolas, monospace; }
+.deck-menu button { text-align: left; padding: 5px 10px; background: none; border: none; box-shadow: none; color: var(--t-ink); font: inherit; border-radius: 0; }
+.deck-menu button:hover { background: var(--t-hover); }
+.deck-menu button.danger { color: var(--t-err); }
+
 body.leaving #windows { transform: scale(0.96); opacity: 0; }
 body.leaving #zoombar { transform: translateY(160%); opacity: 0; }
 

@@ -4,6 +4,7 @@ import { byId, el } from './dom';
 import { DOT, labelOf, type AgentView, type ApprovalView } from './hud';
 import { NAMES, panels, type PanelName } from './panels';
 import { savedTheme, THEMES, type TermTheme } from './pixels';
+import { focusShell, mountShell } from './shell';
 import { dockTerm, type Term } from './terminal';
 
 /**
@@ -12,7 +13,11 @@ import { dockTerm, type Term } from './terminal';
  * terminal below. Click one to zoom in and work in it; Esc, the ⊖ button or
  * Ctrl + scroll down zooms back out. The tabs along the top jump straight to
  * any of them. Drag a terminal in the overview to move it; the order is kept.
+ * The first one is a real shell (see shell.ts). Right-click a person's tab to
+ * fire them, a group's to disband it.
  */
+
+const SHELL = 's:main';
 
 const KEY = 'lgih.view';
 /** The order the terminals were dragged into. */
@@ -20,7 +25,7 @@ const ORDER_KEY = 'lgih.deck.order';
 /** How far the mouse has to move before a press on a terminal becomes a drag rather than a click. */
 const DRAG_PX = 6;
 
-interface Tile { key: string; box: HTMLElement; term: Term }
+interface Tile { key: string; box: HTMLElement; term: Term | null }
 
 let agents: AgentView[] = [];
 let teams: Team[] = [];
@@ -62,6 +67,7 @@ function inOrder<T>(list: T[], keyOf: (x: T) => string) {
 function wanted(): { key: string; agentId: string | null; teamId: string | null }[] {
   return inOrder(
     [
+      { key: SHELL, agentId: null, teamId: null },
       ...teams.map((t) => ({ key: `t:${t.id}`, agentId: null, teamId: t.id })),
       ...agents.map((a) => ({ key: `a:${a.id}`, agentId: a.id, teamId: null })),
     ],
@@ -140,8 +146,8 @@ function sync() {
   const keys = new Set(want.map((w) => w.key));
   for (const [key, t] of tiles) {
     // gone, or their terminal closed itself (let go, disbanded)
-    if (!keys.has(key) || !t.term.alive) {
-      t.term.close();
+    if (!keys.has(key) || (t.term && !t.term.alive)) {
+      t.term?.close();
       t.box.remove();
       tiles.delete(key);
     }
@@ -155,6 +161,15 @@ function sync() {
     box.addEventListener('click', () => Date.now() - droppedAt > 250 && zoomed !== w.key && zoom(w.key), true);
     draggable(box);
     grid().append(box);
+    if (w.key === SHELL) {
+      const bar = el('header', 'term-bar');
+      bar.append(el('span', 'term-tab', '$ shell'), el('span', 'shell-tip', 'claude <name> opens their terminal · claude runs Claude Code here · Ctrl+C ends it'));
+      box.classList.add('shell-tile');
+      box.append(bar);
+      mountShell(box);
+      tiles.set(w.key, { key: w.key, box, term: null });
+      continue;
+    }
     tiles.set(w.key, { key: w.key, box, term: dockTerm(box, w.agentId, w.teamId) });
   }
   // keep them in the same order as the tabs
@@ -162,7 +177,7 @@ function sync() {
   const shown = [...grid().querySelectorAll(':scope > .tile')];
   if (boxes.some((b, i) => shown[i] !== b)) grid().append(...boxes);
   if (zoomed && !tiles.has(zoomed)) zoomed = null;
-  byId('deck-empty').hidden = tiles.size > 0;
+  byId('deck-empty').hidden = tiles.size > 1;
   layout();
   renderTabs();
 }
@@ -192,7 +207,7 @@ function zoom(key: string | null) {
     layout();
     renderTabs();
   });
-  if (key) window.setTimeout(() => tiles.get(key)?.term.focus(), 30);
+  if (key) window.setTimeout(() => (key === SHELL ? focusShell() : tiles.get(key)?.term?.focus()), 30);
 }
 
 /** Tabs in order, so Alt + a number jumps to one, tmux style. */
@@ -212,11 +227,55 @@ function tab(key: string | null, label: string, dot?: string, title?: string) {
   }
   b.append(el('span', undefined, label));
   if (zoomed === key) b.append(el('span', 'mark', '*'));
-  if (key && needs(key)) b.append(el('b', 'flag', '!'));
+  if (key && key !== SHELL && needs(key)) b.append(el('b', 'flag', '!'));
   if (n < 10) title = `${title ?? label} (Alt+${n})`;
   if (title) b.title = title;
   b.onclick = () => zoom(key);
+  if (key?.startsWith('a:') || key?.startsWith('t:')) b.oncontextmenu = (e) => {
+    e.preventDefault();
+    tabMenu(key, label, e.clientX, e.clientY);
+  };
   return b;
+}
+
+/** Right-click on a tab: fire the person, or disband the group. Asks once, in the menu itself. */
+function tabMenu(key: string, name: string, x: number, y: number) {
+  document.getElementById('deck-menu')?.remove();
+  const menu = el('div', 'deck-menu');
+  menu.id = 'deck-menu';
+  menu.setAttribute('role', 'menu');
+  const person = key.startsWith('a:');
+  const id = key.slice(2);
+  const open = el('button', undefined, 'Open terminal');
+  open.onclick = () => {
+    menu.remove();
+    zoom(key);
+  };
+  const act = el('button', 'danger', person ? `Fire ${name}` : `Disband ${name}`);
+  act.title = person ? `${name} stops, packs up and leaves. Their branches stay.` : 'Everyone goes back to working on their own.';
+  let sure = false;
+  act.onclick = () => {
+    if (!sure) {
+      sure = true;
+      act.textContent = person ? `Sure? Fire ${name}` : `Sure? Disband ${name}`;
+      return;
+    }
+    menu.remove();
+    bus.emit(person ? 'agent:fire' : 'team:disband', id);
+  };
+  menu.append(open, act);
+  document.body.append(menu);
+  const r = menu.getBoundingClientRect();
+  menu.style.left = `${Math.min(x, innerWidth - r.width - 4)}px`;
+  menu.style.top = `${Math.min(y, innerHeight - r.height - 4)}px`;
+  const away = (e: Event) => {
+    if (e instanceof KeyboardEvent ? e.key !== 'Escape' : menu.contains(e.target as Node)) return;
+    menu.remove();
+    window.removeEventListener('pointerdown', away, true);
+    window.removeEventListener('keydown', away, true);
+  };
+  window.addEventListener('pointerdown', away, true);
+  window.addEventListener('keydown', away, true);
 }
 
 let tabsKey = '';
@@ -226,7 +285,7 @@ function renderTabs() {
   if (key === tabsKey) return;
   tabsKey = key;
   order = [];
-  const parts: HTMLElement[] = [tab(null, 'all', undefined, 'Every terminal at once')];
+  const parts: HTMLElement[] = [tab(null, 'all', undefined, 'Every terminal at once'), tab(SHELL, '$ shell', undefined, 'Your shell (WSL). claude <name> opens their terminal, claude runs Claude Code')];
   if (teams.length) parts.push(el('span', 'deck-sep'));
   for (const t of inOrder(teams, (x) => `t:${x.id}`)) {
     const m = views.get(t.manager);
@@ -274,7 +333,7 @@ function setOn(next: boolean) {
   stowed = [];
   zoomed = null;
   for (const t of tiles.values()) {
-    t.term.close();
+    t.term?.close();
     t.box.remove();
   }
   tiles.clear();
