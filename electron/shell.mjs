@@ -1,5 +1,6 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import os from 'node:os';
+import { settings } from './settings.mjs';
 
 /**
  * The real shell in the terminal view: bash in WSL (on Windows) or on this
@@ -148,6 +149,24 @@ const code = () => {
   return `import base64;exec(base64.b64decode('${Buffer.from(src).toString('base64')}').decode())`;
 };
 
+/**
+ * Which WSL system to open: the one the projects folder lives in, or else the
+ * first that isn't Docker Desktop's (which is often the default, and has no
+ * Python or bash).
+ */
+async function distro() {
+  const m = /^\\\\(?:wsl\.localhost|wsl\$)\\([^\\]+)/i.exec(settings().projectsRoot ?? '');
+  if (m) return m[1];
+  const list = await new Promise((resolve) =>
+    execFile('wsl.exe', ['-l', '-q'], { encoding: 'utf16le', timeout: 8000, windowsHide: true }, (err, out) => resolve(err ? '' : out)));
+  return list.split(/\r?\n/).map((d) => d.replace(/\0/g, '').trim()).find((d) => d && !d.startsWith('docker-desktop')) ?? null;
+}
+
+/** wsl.exe complains about every Windows PATH entry it can't map (a missing D: drive...): not worth showing. */
+const noise = /^wsl: Failed to translate .*$\r?\n?/gm;
+/** Text from outside the terminal has bare newlines; a terminal needs \r\n. */
+const crlf = (s) => s.replace(noise, '').replace(/\r?\n/g, '\r\n');
+
 const frame = (kind, msg) => Buffer.from(`\0${kind}${JSON.stringify(msg)}\n`);
 
 export function setupShell(ipcMain, getWin) {
@@ -157,11 +176,13 @@ export function setupShell(ipcMain, getWin) {
     if (win && !win.isDestroyed()) win.webContents.send(...args);
   };
 
-  ipcMain.handle('shell:start', (_e, id, cols, rows) => {
+  ipcMain.handle('shell:start', async (_e, id, cols, rows) => {
     shells.get(id)?.kill();
     const win = process.platform === 'win32';
+    const d = win ? await distro() : null;
+    if (win && !d) return { ok: false, error: 'no Linux system found in WSL (only Docker Desktop\'s). Install Ubuntu with: wsl --install' };
     const [file, args] = win
-      ? ['wsl.exe', ['--cd', '~', '-e', '/usr/bin/env', 'python3', '-u', '-c', code()]]
+      ? ['wsl.exe', ['-d', d, '--cd', '~', '-e', '/usr/bin/env', 'python3', '-u', '-c', code()]]
       : ['python3', ['-u', '-c', code()]];
     let p;
     try {
@@ -172,7 +193,10 @@ export function setupShell(ipcMain, getWin) {
     shells.set(id, p);
     p.stdin.write(frame('R', { cols, rows }));
     p.stdout.on('data', (b) => send('shell:data', id, new Uint8Array(b)));
-    p.stderr.on('data', (b) => send('shell:data', id, new Uint8Array(b)));
+    p.stderr.on('data', (b) => {
+      const text = crlf(b.toString());
+      if (text) send('shell:data', id, new TextEncoder().encode(text));
+    });
     p.on('error', (e) => send('shell:data', id, new TextEncoder().encode(`\r\n${e.message}\r\n`)));
     p.on('exit', (code) => {
       if (shells.get(id) === p) shells.delete(id);

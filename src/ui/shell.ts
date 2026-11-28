@@ -43,6 +43,9 @@ class Shell {
   private readonly xt: Terminal;
   private readonly fit = new FitAddon();
   private started = false;
+  /** When the shell last started, and how many times in a row it died straight away. */
+  private startedAt = 0;
+  private quickExits = 0;
   /** Claude Code is running in it: Ctrl+C ends that session. */
   private cli = false;
   /** Someone's office terminal shown over the shell. */
@@ -163,6 +166,7 @@ class Shell {
       return;
     }
     this.refit();
+    this.startedAt = Date.now();
     const res = await b.start(ID, this.xt.cols, this.xt.rows);
     if (!res.ok) {
       this.started = false;
@@ -176,6 +180,18 @@ class Shell {
     this.started = false;
     this.cli = false;
     if (this.attached) this.detach();
+    this.quickExits = Date.now() - this.startedAt < 5000 ? this.quickExits + 1 : 0;
+    if (this.quickExits >= 2) {
+      // it can't start at all: say so once instead of trying forever
+      this.xt.write('\r\n\x1b[31mThe shell keeps failing to start (see above).\x1b[0m Press Enter to try again.\r\n');
+      const once = this.xt.onData((d) => {
+        if (!d.includes('\r')) return;
+        once.dispose();
+        this.quickExits = 0;
+        void this.start();
+      });
+      return;
+    }
     this.xt.write('\r\n\x1b[2m(shell exited, starting a new one)\x1b[0m\r\n');
     window.setTimeout(() => void this.start(), 600);
   }
